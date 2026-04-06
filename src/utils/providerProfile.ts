@@ -14,6 +14,7 @@ import {
 } from './providerRecommendation.ts'
 import { readGeminiAccessToken } from './geminiCredentials.ts'
 import { getOllamaChatBaseUrl } from './providerDiscovery.ts'
+import { resolveGigaChatCredential } from './gigachatAuth.ts'
 
 export const PROFILE_FILE_NAME = '.openclaude-profile.json'
 export const DEFAULT_GEMINI_BASE_URL =
@@ -23,6 +24,7 @@ export const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash'
 const PROFILE_ENV_KEYS = [
   'CLAUDE_CODE_USE_OPENAI',
   'CLAUDE_CODE_USE_GEMINI',
+  'CLAUDE_CODE_USE_GIGACHAT',
   'CLAUDE_CODE_USE_BEDROCK',
   'CLAUDE_CODE_USE_VERTEX',
   'CLAUDE_CODE_USE_FOUNDRY',
@@ -38,6 +40,13 @@ const PROFILE_ENV_KEYS = [
   'GEMINI_MODEL',
   'GEMINI_BASE_URL',
   'GOOGLE_API_KEY',
+  'GIGACHAT_BASE_URL',
+  'GIGACHAT_MODEL',
+  'GIGACHAT_API_KEY',
+  'GIGACHAT_CERT_PATH',
+  'GIGACHAT_KEY_PATH',
+  'GIGACHAT_CA_PATH',
+  'GIGACHAT_KEY_PASSPHRASE',
 ] as const
 
 const SECRET_ENV_KEYS = [
@@ -45,9 +54,10 @@ const SECRET_ENV_KEYS = [
   'CODEX_API_KEY',
   'GEMINI_API_KEY',
   'GOOGLE_API_KEY',
+  'GIGACHAT_API_KEY',
 ] as const
 
-export type ProviderProfile = 'openai' | 'ollama' | 'codex' | 'gemini' | 'atomic-chat'
+export type ProviderProfile = 'openai' | 'ollama' | 'codex' | 'gemini' | 'atomic-chat' | 'gigachat'
 
 export type ProfileEnv = {
   OPENAI_BASE_URL?: string
@@ -60,6 +70,13 @@ export type ProfileEnv = {
   GEMINI_AUTH_MODE?: 'api-key' | 'access-token' | 'adc'
   GEMINI_MODEL?: string
   GEMINI_BASE_URL?: string
+  GIGACHAT_BASE_URL?: string
+  GIGACHAT_MODEL?: string
+  GIGACHAT_API_KEY?: string
+  GIGACHAT_CERT_PATH?: string
+  GIGACHAT_KEY_PATH?: string
+  GIGACHAT_CA_PATH?: string
+  GIGACHAT_KEY_PASSPHRASE?: string
 }
 
 export type ProfileFile = {
@@ -94,7 +111,8 @@ export function isProviderProfile(value: unknown): value is ProviderProfile {
     value === 'ollama' ||
     value === 'codex' ||
     value === 'gemini' ||
-    value === 'atomic-chat'
+    value === 'atomic-chat' ||
+    value === 'gigachat'
   )
 }
 
@@ -411,6 +429,7 @@ export function hasExplicitProviderSelection(
     processEnv.CLAUDE_CODE_USE_OPENAI !== undefined ||
     processEnv.CLAUDE_CODE_USE_GITHUB !== undefined ||
     processEnv.CLAUDE_CODE_USE_GEMINI !== undefined ||
+    processEnv.CLAUDE_CODE_USE_GIGACHAT !== undefined ||
     processEnv.CLAUDE_CODE_USE_BEDROCK !== undefined ||
     processEnv.CLAUDE_CODE_USE_VERTEX !== undefined ||
     processEnv.CLAUDE_CODE_USE_FOUNDRY !== undefined
@@ -482,6 +501,24 @@ export async function buildLaunchEnv(options: {
   const persistedGeminiKey = sanitizeApiKey(persistedEnv.GEMINI_API_KEY)
   const persistedGeminiAuthMode = persistedEnv.GEMINI_AUTH_MODE
 
+  // GigaChat-specific variables
+  const persistedGigaChatModel = sanitizeProviderConfigValue(
+    persistedEnv.GIGACHAT_MODEL,
+    persistedEnv,
+  )
+  const persistedGigaChatBaseUrl = sanitizeProviderConfigValue(
+    persistedEnv.GIGACHAT_BASE_URL,
+    persistedEnv,
+  )
+  const shellGigaChatModel = sanitizeProviderConfigValue(
+    processEnv.GIGACHAT_MODEL,
+    processEnv,
+  )
+  const shellGigaChatBaseUrl = sanitizeProviderConfigValue(
+    processEnv.GIGACHAT_BASE_URL,
+    processEnv,
+  )
+
   if (options.profile === 'gemini') {
     const env: NodeJS.ProcessEnv = {
       ...processEnv,
@@ -522,6 +559,49 @@ export async function buildLaunchEnv(options: {
       }
     } else {
       delete env.GEMINI_ACCESS_TOKEN
+    }
+
+    delete env.GOOGLE_API_KEY
+    delete env.OPENAI_BASE_URL
+    delete env.OPENAI_MODEL
+    delete env.OPENAI_API_KEY
+    delete env.CODEX_API_KEY
+    delete env.CHATGPT_ACCOUNT_ID
+    delete env.CODEX_ACCOUNT_ID
+
+    return env
+  }
+
+  if (options.profile === 'gigachat') {
+    const env: NodeJS.ProcessEnv = {
+      ...processEnv,
+      CLAUDE_CODE_USE_GIGACHAT: '1',
+    }
+
+    delete env.CLAUDE_CODE_USE_OPENAI
+    delete env.CLAUDE_CODE_USE_GEMINI
+    delete env.CLAUDE_CODE_USE_GITHUB
+
+    const DEFAULT_GIGACHAT_BASE_URL =
+      'https://gigachat.devices.sberbank.ru/api/v2'
+    
+    env.GIGACHAT_MODEL =
+      shellGigaChatModel ||
+      persistedGigaChatModel ||
+      ''
+    env.GIGACHAT_BASE_URL =
+      shellGigaChatBaseUrl ||
+      persistedGigaChatBaseUrl ||
+      DEFAULT_GIGACHAT_BASE_URL
+
+    // GigaChat uses certificate-based or API key authentication
+    // The credentials are handled by the openaiShim via resolveGigaChatCredential
+    // No need to set OPENAI_API_KEY for certificate auth
+    const credential = resolveGigaChatCredential(processEnv)
+    if (credential.kind === 'api-key' && credential.credential) {
+      env.GIGACHAT_API_KEY = credential.credential
+    } else {
+      delete env.GIGACHAT_API_KEY
     }
 
     delete env.GOOGLE_API_KEY
@@ -617,6 +697,35 @@ export async function buildLaunchEnv(options: {
     } else {
       delete env.CHATGPT_ACCOUNT_ID
     }
+    delete env.CODEX_ACCOUNT_ID
+
+    return env
+  }
+
+  if (options.profile === 'gigachat') {
+    const DEFAULT_GIGACHAT_BASE_URL =
+      process.env.GIGACHAT_BASE_URL ??
+      'https://gigachat.devices.sberbank.ru/api/v2'
+    
+    env.OPENAI_BASE_URL = persistedEnv.OPENAI_BASE_URL || DEFAULT_GIGACHAT_BASE_URL
+    env.OPENAI_MODEL =
+      persistedEnv.OPENAI_MODEL ||
+      persistedEnv.GIGACHAT_MODEL ||
+      processEnv.GIGACHAT_MODEL ||
+      ''
+
+    // GigaChat uses certificate-based or API key authentication
+    // The credentials are handled by the openaiShim via resolveGigaChatCredential
+    // No need to set OPENAI_API_KEY for certificate auth
+    const credential = resolveGigaChatCredential(processEnv)
+    if (credential.kind === 'api-key' && credential.credential) {
+      env.OPENAI_API_KEY = credential.credential
+    } else {
+      delete env.OPENAI_API_KEY
+    }
+    
+    delete env.CODEX_API_KEY
+    delete env.CHATGPT_ACCOUNT_ID
     delete env.CODEX_ACCOUNT_ID
 
     return env

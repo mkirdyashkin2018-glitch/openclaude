@@ -11,23 +11,26 @@ export type APIProvider =
   | 'gemini'
   | 'github'
   | 'codex'
+  | 'gigachat'
 
 export function getAPIProvider(): APIProvider {
-  return isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI)
-    ? 'gemini'
-    : isEnvTruthy(process.env.CLAUDE_CODE_USE_GITHUB)
-      ? 'github'
-      : isEnvTruthy(process.env.CLAUDE_CODE_USE_OPENAI)
-        ? isCodexModel()
-          ? 'codex'
-          : 'openai'
-        : isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK)
-          ? 'bedrock'
-          : isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX)
-            ? 'vertex'
-            : isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY)
-              ? 'foundry'
-              : 'firstParty'
+  return isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT)
+    ? 'gigachat'
+    : isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI)
+      ? 'gemini'
+      : isEnvTruthy(process.env.CLAUDE_CODE_USE_GITHUB)
+        ? 'github'
+        : isEnvTruthy(process.env.CLAUDE_CODE_USE_OPENAI)
+          ? isCodexModel()
+            ? 'codex'
+            : 'openai'
+          : isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK)
+            ? 'bedrock'
+            : isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX)
+              ? 'vertex'
+              : isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY)
+                ? 'foundry'
+                : 'firstParty'
 }
 
 export function usesAnthropicAccountFlow(): boolean {

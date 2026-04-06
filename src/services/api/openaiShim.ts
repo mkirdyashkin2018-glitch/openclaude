@@ -26,6 +26,7 @@ import { isEnvTruthy } from '../../utils/envUtils.js'
 import { resolveGeminiCredential } from '../../utils/geminiAuth.js'
 import { hydrateGeminiAccessTokenFromSecureStorage } from '../../utils/geminiCredentials.js'
 import { hydrateGithubModelsTokenFromSecureStorage } from '../../utils/githubModelsCredentials.js'
+import { resolveGigaChatCredential } from '../../utils/gigachatAuth.js'
 import {
   codexStreamToAnthropic,
   collectCodexCompletedResponse,
@@ -931,6 +932,7 @@ class OpenAIShimMessages {
     }
 
     const isGemini = isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI)
+    const isGigaChat = isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT)
     const apiKey =
       this.providerOverride?.apiKey ?? process.env.OPENAI_API_KEY ?? ''
     // Detect Azure endpoints by hostname (not raw URL) to prevent bypass via
@@ -957,6 +959,13 @@ class OpenAIShimMessages {
           headers['x-goog-user-project'] = geminiCredential.projectId
         }
       }
+    } else if (isGigaChat) {
+      // GigaChat supports both certificate-based and API key authentication
+      const gigaChatCredential = resolveGigaChatCredential()
+      if (gigaChatCredential.kind === 'api-key' && gigaChatCredential.credential) {
+        headers.Authorization = `Bearer ${gigaChatCredential.credential}`
+      }
+      // For certificate-based auth, credentials are handled via HTTPS agent in fetch override
     }
 
     if (isGithub) {
@@ -986,16 +995,78 @@ class OpenAIShimMessages {
       chatCompletionsUrl = `${request.baseUrl}/chat/completions`
     }
 
-    const fetchInit = {
+    const fetchInit: RequestInit = {
       method: 'POST' as const,
       headers,
       body: JSON.stringify(body),
       signal: options?.signal,
     }
 
+    // For GigaChat certificate-based authentication, configure HTTPS agent with certificates
+    if (isGigaChat) {
+      const gigaChatCredential = resolveGigaChatCredential()
+      if (gigaChatCredential.kind === 'certificate') {
+        // Create a custom fetch that uses HTTPS agent with client certificates
+        const https = await import('node:https')
+        const tls = await import('node:tls')
+        
+        const agentOptions: https.AgentOptions = {
+          cert: gigaChatCredential.cert,
+          key: gigaChatCredential.key,
+          passphrase: gigaChatCredential.passphrase,
+          ca: gigaChatCredential.ca,
+          rejectUnauthorized: true,
+        }
+        
+        const agent = new https.Agent(agentOptions)
+        
+        // Create custom fetch using the agent
+        const agentFetch = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+          return new Promise((resolve, reject) => {
+            const parsedUrl = new URL(url as string)
+            const req = https.request({
+              hostname: parsedUrl.hostname,
+              port: parsedUrl.port || 443,
+              path: parsedUrl.pathname + parsedUrl.search,
+              method: init?.method || 'POST',
+              headers: init?.headers as Record<string, string>,
+              agent,
+            }, (res) => {
+              const chunks: Buffer[] = []
+              res.on('data', chunk => chunks.push(Buffer.from(chunk)))
+              res.on('end', () => {
+                const body = Buffer.concat(chunks).toString()
+                const response = new Response(body, {
+                  status: res.statusCode,
+                  statusText: res.statusMessage,
+                  headers: res.headers as Record<string, string>,
+                })
+                resolve(response)
+              })
+            })
+            req.on('error', reject)
+            if (init?.body) {
+              req.write(init.body)
+            }
+            req.end()
+          })
+        }
+        
+        try {
+          response = await agentFetch(chatCompletionsUrl, fetchInit)
+        } catch (error) {
+          throw new Error(`GigaChat certificate authentication failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+    }
+
     const maxAttempts = isGithub ? GITHUB_429_MAX_RETRIES : 1
     let response: Response | undefined
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      // Skip fetch if already executed via certificate auth
+      if (isGigaChat && resolveGigaChatCredential().kind === 'certificate' && response) {
+        break
+      }
       response = await fetch(chatCompletionsUrl, fetchInit)
       if (response.ok) {
         return response
@@ -1173,6 +1244,25 @@ export function createOpenAIShimClient(options: {
     process.env.OPENAI_BASE_URL ??= GITHUB_MODELS_DEFAULT_BASE
     process.env.OPENAI_API_KEY ??=
       process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? ''
+  } else if (isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT)) {
+    // GigaChat uses certificate-based authentication or API key
+    // Map GigaChat base URL and model to OpenAI-compatible env vars
+    process.env.OPENAI_BASE_URL ??=
+      process.env.GIGACHAT_BASE_URL ??
+      'https://gigachat.devices.sberbank.ru/api/v2'
+    
+    const credential = resolveGigaChatCredential()
+    if (credential.kind === 'api-key' && credential.credential) {
+      if (!process.env.OPENAI_API_KEY) {
+        process.env.OPENAI_API_KEY = credential.credential
+      }
+    }
+    // For certificate-based auth, the HTTPS agent will be configured with cert/key
+    // in the fetch override below
+    
+    if (process.env.GIGACHAT_MODEL && !process.env.OPENAI_MODEL) {
+      process.env.OPENAI_MODEL = process.env.GIGACHAT_MODEL
+    }
   }
 
   const beta = new OpenAIShimBeta({
