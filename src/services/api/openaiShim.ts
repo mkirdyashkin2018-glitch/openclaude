@@ -83,7 +83,7 @@ function sleepMs(ms: number): Promise<void> {
 // ---------------------------------------------------------------------------
 
 interface OpenAIMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool'
+  role: 'system' | 'user' | 'assistant' | 'tool' | 'function'
   content?: string | Array<{ type: string; text?: string; image_url?: { url: string } }>
   tool_calls?: Array<{
     id: string
@@ -93,6 +93,10 @@ interface OpenAIMessage {
   }>
   tool_call_id?: string
   name?: string
+  function_call?: {
+    name: string
+    arguments: string
+  }
 }
 
 interface OpenAITool {
@@ -103,6 +107,12 @@ interface OpenAITool {
     parameters: Record<string, unknown>
     strict?: boolean
   }
+}
+
+interface OpenAIFunction {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
 }
 
 function convertSystemPrompt(
@@ -204,8 +214,11 @@ function convertContentBlocks(
 function convertMessages(
   messages: Array<{ role: string; message?: { role?: string; content?: unknown }; content?: unknown }>,
   system: unknown,
+  options?: { useGigaChatFunctions?: boolean },
 ): OpenAIMessage[] {
   const result: OpenAIMessage[] = []
+  const useGigaChatFunctions = options?.useGigaChatFunctions ?? false
+  const toolUseNameById = new Map<string, string>()
 
   // System message first
   const sysText = convertSystemPrompt(system)
@@ -228,11 +241,27 @@ function convertMessages(
         // Emit tool results as tool messages
         for (const tr of toolResults) {
           const trContent = convertToolResultContent(tr.content)
-          result.push({
-            role: 'tool',
-            tool_call_id: tr.tool_use_id ?? 'unknown',
-            content: tr.is_error ? `Error: ${trContent}` : trContent,
-          })
+          if (useGigaChatFunctions) {
+            const resolvedName =
+              (typeof tr.name === 'string' && tr.name.trim()
+                ? tr.name
+                : undefined) ??
+              (typeof tr.tool_use_id === 'string'
+                ? toolUseNameById.get(tr.tool_use_id)
+                : undefined) ??
+              'unknown_function'
+            result.push({
+              role: 'function',
+              name: resolvedName,
+              content: tr.is_error ? `Error: ${trContent}` : trContent,
+            })
+          } else {
+            result.push({
+              role: 'tool',
+              tool_call_id: tr.tool_use_id ?? 'unknown',
+              content: tr.is_error ? `Error: ${trContent}` : trContent,
+            })
+          }
         }
 
         // Emit remaining user content
@@ -264,29 +293,58 @@ function convertMessages(
           })(),
         }
 
-        if (toolUses.length > 0) {
-          assistantMsg.tool_calls = toolUses.map(
-            (tu: {
-              id?: string
-              name?: string
-              input?: unknown
-              extra_content?: Record<string, unknown>
-            }) => ({
-              id: tu.id ?? `call_${crypto.randomUUID().replace(/-/g, '')}`,
-              type: 'function' as const,
-              function: {
-                name: tu.name ?? 'unknown',
+        if (toolUses.length > 0 && useGigaChatFunctions) {
+          if (assistantMsg.content) {
+            result.push(assistantMsg)
+          }
+          for (const tu of toolUses) {
+            const toolCallId = tu.id ?? `call_${crypto.randomUUID().replace(/-/g, '')}`
+            const toolName = tu.name ?? 'unknown'
+            toolUseNameById.set(toolCallId, toolName)
+            result.push({
+              role: 'assistant',
+              content: '',
+              function_call: {
+                name: toolName,
                 arguments:
                   typeof tu.input === 'string'
                     ? tu.input
                     : JSON.stringify(tu.input ?? {}),
               },
-              ...(tu.extra_content ? { extra_content: tu.extra_content } : {}),
-            }),
-          )
-        }
+            })
+          }
+        } else {
+          if (toolUses.length > 0) {
+            assistantMsg.tool_calls = toolUses.map(
+              (tu: {
+                id?: string
+                name?: string
+                input?: unknown
+                extra_content?: Record<string, unknown>
+              }) => {
+                const toolCallId =
+                  tu.id ?? `call_${crypto.randomUUID().replace(/-/g, '')}`
+                if (tu.name) {
+                  toolUseNameById.set(toolCallId, tu.name)
+                }
+                return {
+                  id: toolCallId,
+                  type: 'function' as const,
+                  function: {
+                    name: tu.name ?? 'unknown',
+                    arguments:
+                      typeof tu.input === 'string'
+                        ? tu.input
+                        : JSON.stringify(tu.input ?? {}),
+                  },
+                  ...(tu.extra_content ? { extra_content: tu.extra_content } : {}),
+                }
+              },
+            )
+          }
 
-        result.push(assistantMsg)
+          result.push(assistantMsg)
+        }
       } else {
         result.push({
           role: 'assistant',
@@ -308,7 +366,15 @@ function convertMessages(
   for (const msg of result) {
     const prev = coalesced[coalesced.length - 1]
 
-    if (prev && prev.role === msg.role && msg.role !== 'tool' && msg.role !== 'system') {
+    if (
+      prev &&
+      prev.role === msg.role &&
+      msg.role !== 'tool' &&
+      msg.role !== 'system' &&
+      msg.role !== 'function' &&
+      !prev.function_call &&
+      !msg.function_call
+    ) {
       const prevContent = prev.content
       const curContent = msg.content
 
@@ -400,12 +466,11 @@ function normalizeSchemaForOpenAI(
 
 function convertTools(
   tools: Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>,
-): OpenAITool[] {
-  const isGemini =
-    !isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT) &&
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI)
+): OpenAITool[] | OpenAIFunction[] {
+  const isGigaChat = isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT)
+  const isGemini = !isGigaChat && isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI)
 
-  return tools
+  const normalized = tools
     .filter(t => t.name !== 'ToolSearchTool') // Not relevant for OpenAI
     .map(t => {
       const schema = { ...(t.input_schema ?? { type: 'object', properties: {} }) } as Record<string, unknown>
@@ -422,14 +487,20 @@ function convertTools(
       }
 
       return {
-        type: 'function' as const,
-        function: {
-          name: t.name,
-          description: t.description ?? '',
-          parameters: normalizeSchemaForOpenAI(schema, !isGemini),
-        },
+        name: t.name,
+        description: t.description ?? '',
+        parameters: normalizeSchemaForOpenAI(schema, !isGemini && !isGigaChat),
       }
     })
+
+  if (isGigaChat) {
+    return normalized
+  }
+
+  return normalized.map(fn => ({
+    type: 'function' as const,
+    function: fn,
+  }))
 }
 
 // ---------------------------------------------------------------------------
@@ -445,6 +516,10 @@ interface OpenAIStreamChunk {
     delta: {
       role?: string
       content?: string | null
+      function_call?: {
+        name?: string
+        arguments?: string | Record<string, unknown>
+      }
       tool_calls?: Array<{
         index: number
         id?: string
@@ -634,6 +709,63 @@ async function* openaiStreamToAnthropic(
           }
         }
 
+        // Legacy OpenAI function calling (GigaChat)
+        if (delta.function_call) {
+          if (hasEmittedContentStart) {
+            yield {
+              type: 'content_block_stop',
+              index: contentBlockIndex,
+            }
+            contentBlockIndex++
+            hasEmittedContentStart = false
+          }
+
+          const functionCallIndex = -1
+          const existingCall = activeToolCalls.get(functionCallIndex)
+          const functionName = delta.function_call.name ?? existingCall?.name
+
+          if (!existingCall && functionName) {
+            const functionCallId = `call_${crypto.randomUUID().replace(/-/g, '')}`
+            activeToolCalls.set(functionCallIndex, {
+              id: functionCallId,
+              name: functionName,
+              index: contentBlockIndex,
+              jsonBuffer: '',
+            })
+
+            yield {
+              type: 'content_block_start',
+              index: contentBlockIndex,
+              content_block: {
+                type: 'tool_use',
+                id: functionCallId,
+                name: functionName,
+                input: {},
+              },
+            }
+            contentBlockIndex++
+          }
+
+          const active = activeToolCalls.get(functionCallIndex)
+          if (active && delta.function_call.arguments !== undefined) {
+            const argumentChunk =
+              typeof delta.function_call.arguments === 'string'
+                ? delta.function_call.arguments
+                : JSON.stringify(delta.function_call.arguments)
+            if (argumentChunk) {
+              active.jsonBuffer += argumentChunk
+              yield {
+                type: 'content_block_delta',
+                index: active.index,
+                delta: {
+                  type: 'input_json_delta',
+                  partial_json: argumentChunk,
+                },
+              }
+            }
+          }
+        }
+
         // Finish — guard ensures we only process finish_reason once even if
         // multiple chunks arrive with finish_reason set (some providers do this)
         if (choice.finish_reason && !hasProcessedFinishReason) {
@@ -684,6 +816,8 @@ async function* openaiStreamToAnthropic(
           const stopReason =
             choice.finish_reason === 'tool_calls'
               ? 'tool_use'
+              : choice.finish_reason === 'function_call'
+                ? 'tool_use'
               : choice.finish_reason === 'length'
                 ? 'max_tokens'
                 : 'end_turn'
@@ -859,6 +993,9 @@ class OpenAIShimMessages {
     params: ShimCreateParams,
     options?: { signal?: AbortSignal; headers?: Record<string, string> },
   ): Promise<Response> {
+    const isGigaChat = isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT)
+    const isGemini =
+      !isGigaChat && isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI)
     const openaiMessages = convertMessages(
       params.messages as Array<{
         role: string
@@ -866,6 +1003,7 @@ class OpenAIShimMessages {
         content?: unknown
       }>,
       params.system,
+      { useGigaChatFunctions: isGigaChat },
     )
 
     const body: Record<string, unknown> = {
@@ -884,12 +1022,20 @@ class OpenAIShimMessages {
       : undefined
 
     if (maxTokensValue !== undefined) {
-      body.max_completion_tokens = maxTokensValue
+      if (isGigaChat) {
+        body.max_tokens = maxTokensValue
+      } else {
+        body.max_completion_tokens = maxTokensValue
+      }
     } else if (maxCompletionTokensValue !== undefined) {
-      body.max_completion_tokens = maxCompletionTokensValue
+      if (isGigaChat) {
+        body.max_tokens = maxCompletionTokensValue
+      } else {
+        body.max_completion_tokens = maxCompletionTokensValue
+      }
     }
 
-    if (params.stream && !isLocalProviderUrl(request.baseUrl)) {
+    if (params.stream && !isGigaChat && !isLocalProviderUrl(request.baseUrl)) {
       body.stream_options = { include_usage: true }
     }
 
@@ -911,20 +1057,37 @@ class OpenAIShimMessages {
         }>,
       )
       if (converted.length > 0) {
-        body.tools = converted
-        if (params.tool_choice) {
-          const tc = params.tool_choice as { type?: string; name?: string }
-          if (tc.type === 'auto') {
-            body.tool_choice = 'auto'
-          } else if (tc.type === 'tool' && tc.name) {
-            body.tool_choice = {
-              type: 'function',
-              function: { name: tc.name },
+        if (isGigaChat) {
+          body.functions = converted
+          if (params.tool_choice) {
+            const tc = params.tool_choice as { type?: string; name?: string }
+            if (tc.type === 'auto') {
+              body.function_call = 'auto'
+            } else if (tc.type === 'tool' && tc.name) {
+              body.function_call = { name: tc.name }
+            } else if (tc.type === 'any') {
+              // GigaChat function calling does not support "required"; use auto.
+              body.function_call = 'auto'
+            } else if (tc.type === 'none') {
+              body.function_call = 'none'
             }
-          } else if (tc.type === 'any') {
-            body.tool_choice = 'required'
-          } else if (tc.type === 'none') {
-            body.tool_choice = 'none'
+          }
+        } else {
+          body.tools = converted
+          if (params.tool_choice) {
+            const tc = params.tool_choice as { type?: string; name?: string }
+            if (tc.type === 'auto') {
+              body.tool_choice = 'auto'
+            } else if (tc.type === 'tool' && tc.name) {
+              body.tool_choice = {
+                type: 'function',
+                function: { name: tc.name },
+              }
+            } else if (tc.type === 'any') {
+              body.tool_choice = 'required'
+            } else if (tc.type === 'none') {
+              body.tool_choice = 'none'
+            }
           }
         }
       }
@@ -936,9 +1099,6 @@ class OpenAIShimMessages {
       ...(options?.headers ?? {}),
     }
 
-    const isGigaChat = isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT)
-    const isGemini =
-      !isGigaChat && isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI)
     if (isGigaChat) {
       // Never leak first-party auth headers into GigaChat strict mTLS mode.
       delete headers.Authorization
@@ -1082,6 +1242,10 @@ class OpenAIShimMessages {
             | string
             | null
             | Array<{ type?: string; text?: string }>
+          function_call?: {
+            name?: string
+            arguments?: string | Record<string, unknown>
+          }
           tool_calls?: Array<{
             id: string
             function: { name: string; arguments: string }
@@ -1140,11 +1304,32 @@ class OpenAIShimMessages {
           ...(tc.extra_content ? { extra_content: tc.extra_content } : {}),
         })
       }
+    } else if (choice?.message?.function_call?.name) {
+      const functionCall = choice.message.function_call
+      let input: unknown
+      if (typeof functionCall.arguments === 'string') {
+        try {
+          input = JSON.parse(functionCall.arguments)
+        } catch {
+          input = { raw: functionCall.arguments }
+        }
+      } else {
+        input = functionCall.arguments ?? {}
+      }
+
+      content.push({
+        type: 'tool_use',
+        id: `call_${crypto.randomUUID().replace(/-/g, '')}`,
+        name: functionCall.name,
+        input,
+      })
     }
 
     const stopReason =
       choice?.finish_reason === 'tool_calls'
         ? 'tool_use'
+        : choice?.finish_reason === 'function_call'
+          ? 'tool_use'
         : choice?.finish_reason === 'length'
           ? 'max_tokens'
           : 'end_turn'
