@@ -39,6 +39,10 @@ export function getSmallFastModel(): ModelName {
   if (getAPIProvider() === 'gemini') {
     return process.env.GEMINI_MODEL || 'gemini-2.0-flash-lite'
   }
+  // For GigaChat provider, use configured GigaChat model
+  if (getAPIProvider() === 'gigachat') {
+    return process.env.GIGACHAT_MODEL || process.env.OPENAI_MODEL || 'GigaChat-2-Max'
+  }
   // For OpenAI provider, use OPENAI_MODEL or a sensible default
   if (getAPIProvider() === 'openai') {
     return process.env.OPENAI_MODEL || 'gpt-4o-mini'
@@ -80,6 +84,7 @@ export function getUserSpecifiedModelSetting(): ModelSetting | undefined {
     const provider = getAPIProvider()
     specifiedModel =
       (provider === 'gemini' ? process.env.GEMINI_MODEL : undefined) ||
+      (provider === 'gigachat' ? process.env.GIGACHAT_MODEL : undefined) ||
       (provider === 'openai' || provider === 'gemini' ? process.env.OPENAI_MODEL : undefined) ||
       (provider === 'firstParty' ? process.env.ANTHROPIC_MODEL : undefined) ||
       settings.model ||
@@ -127,6 +132,10 @@ export function getDefaultOpusModel(): ModelName {
   if (getAPIProvider() === 'gemini') {
     return process.env.GEMINI_MODEL || 'gemini-2.5-pro-preview-03-25'
   }
+  // GigaChat provider
+  if (getAPIProvider() === 'gigachat') {
+    return process.env.GIGACHAT_MODEL || process.env.OPENAI_MODEL || 'GigaChat-2-Max'
+  }
   // OpenAI provider: use user-specified model or default
   if (getAPIProvider() === 'openai') {
     return process.env.OPENAI_MODEL || 'gpt-4o'
@@ -153,6 +162,10 @@ export function getDefaultSonnetModel(): ModelName {
   if (getAPIProvider() === 'gemini') {
     return process.env.GEMINI_MODEL || 'gemini-2.0-flash'
   }
+  // GigaChat provider
+  if (getAPIProvider() === 'gigachat') {
+    return process.env.GIGACHAT_MODEL || process.env.OPENAI_MODEL || 'GigaChat-2-Max'
+  }
   // OpenAI provider
   if (getAPIProvider() === 'openai') {
     return process.env.OPENAI_MODEL || 'gpt-4o'
@@ -176,6 +189,10 @@ export function getDefaultHaikuModel(): ModelName {
   // Gemini provider
   if (getAPIProvider() === 'gemini') {
     return process.env.GEMINI_MODEL || 'gemini-2.0-flash-lite'
+  }
+  // GigaChat provider
+  if (getAPIProvider() === 'gigachat') {
+    return process.env.GIGACHAT_MODEL || process.env.OPENAI_MODEL || 'GigaChat-2-Max'
   }
   // OpenAI provider
   if (getAPIProvider() === 'openai') {
@@ -232,6 +249,10 @@ export function getDefaultMainLoopModelSetting(): ModelName | ModelAlias {
   // Gemini provider: always use the configured Gemini model
   if (getAPIProvider() === 'gemini') {
     return process.env.GEMINI_MODEL || 'gemini-2.0-flash'
+  }
+  // GigaChat provider: always use the configured GigaChat model
+  if (getAPIProvider() === 'gigachat') {
+    return process.env.GIGACHAT_MODEL || process.env.OPENAI_MODEL || 'GigaChat-2-Max'
   }
   // OpenAI provider: always use the configured OpenAI model
   if (getAPIProvider() === 'openai') {
@@ -421,7 +442,7 @@ export function renderModelSetting(setting: ModelName | ModelAlias): string {
  */
 export function getPublicModelDisplayName(model: ModelName): string | null {
   // For OpenAI/Gemini/Codex providers, show the actual model name not a Claude alias
-  if (getAPIProvider() === 'openai' || getAPIProvider() === 'gemini' || getAPIProvider() === 'codex') {
+  if (getAPIProvider() === 'openai' || getAPIProvider() === 'gemini' || getAPIProvider() === 'codex' || getAPIProvider() === 'gigachat') {
     return null
   }
   switch (model) {
