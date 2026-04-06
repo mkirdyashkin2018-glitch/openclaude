@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs'
 import memoize from 'lodash-es/memoize.js'
+import type * as undici from 'undici'
 import { logForDebugging } from './debug.js'
+import type { TLSConfig } from './mtls.js'
 
-export type GigaChatAuthMode = 'certificate' | 'api-key'
+type MissingCredentialVar = 'GIGACHAT_CERT_PATH' | 'GIGACHAT_KEY_PATH'
 
 export type GigaChatResolvedCredential =
   | {
@@ -11,105 +13,170 @@ export type GigaChatResolvedCredential =
       key: string
       passphrase?: string
       ca?: string | string[]
-    }
-  | {
-      kind: 'api-key'
-      credential: string
+      certPath: string
+      keyPath: string
+      caPath?: string
     }
   | {
       kind: 'none'
+      reason: 'missing_paths' | 'read_failed'
+      missing?: MissingCredentialVar[]
+      detail?: string
     }
 
-/**
- * Get GigaChat authentication mode from environment variables
- */
-export function getGigaChatAuthMode(
+export type GigaChatFetchOptions = {
+  tls?: TLSConfig
+  dispatcher?: undici.Dispatcher
+}
+
+type GigaChatEnvSnapshot = {
+  certPath?: string
+  keyPath?: string
+  caPath?: string
+  passphrase?: string
+}
+
+function loadPemFile(path: string): string {
+  return readFileSync(path, { encoding: 'utf8' })
+}
+
+function getGigaChatEnvSnapshot(
   env: NodeJS.ProcessEnv = process.env,
-): GigaChatAuthMode | undefined {
-  const normalized = env.GIGACHAT_AUTH_MODE?.trim().toLowerCase()
-  if (normalized === 'certificate' || normalized === 'api-key') {
-    return normalized
+): GigaChatEnvSnapshot {
+  return {
+    certPath: env.GIGACHAT_CERT_PATH?.trim() || undefined,
+    keyPath: env.GIGACHAT_KEY_PATH?.trim() || undefined,
+    caPath: env.GIGACHAT_CA_PATH?.trim() || undefined,
+    passphrase: env.GIGACHAT_KEY_PASSPHRASE?.trim() || undefined,
   }
-  // Default to certificate mode if certificate paths are provided
-  if (env.GIGACHAT_CERT_PATH || env.GIGACHAT_KEY_PATH) {
-    return 'certificate'
-  }
-  // Default to api-key mode if API key is provided
-  if (env.GIGACHAT_API_KEY) {
-    return 'api-key'
-  }
-  return undefined
 }
 
-/**
- * Load certificate content from file path
- */
-function loadCertificateFile(path: string | undefined): string | undefined {
-  if (!path) return undefined
-  try {
-    const content = readFileSync(path.trim(), { encoding: 'utf8' })
-    logForDebugging(`GigaChat: Loaded certificate from ${path}`)
-    return content
-  } catch (error) {
-    logForDebugging(`GigaChat: Failed to load certificate from ${path}: ${error}`, {
-      level: 'error',
+function toGigaChatCacheKey(snapshot: GigaChatEnvSnapshot): string {
+  return [
+    snapshot.certPath ?? '',
+    snapshot.keyPath ?? '',
+    snapshot.caPath ?? '',
+    snapshot.passphrase ?? '',
+  ].join('\u0000')
+}
+
+const resolveGigaChatCredentialMemoized = memoize(
+  (
+    _cacheKey: string,
+    snapshot: GigaChatEnvSnapshot,
+  ): GigaChatResolvedCredential => {
+    const missing: MissingCredentialVar[] = []
+    if (!snapshot.certPath) {
+      missing.push('GIGACHAT_CERT_PATH')
+    }
+    if (!snapshot.keyPath) {
+      missing.push('GIGACHAT_KEY_PATH')
+    }
+    if (missing.length > 0) {
+      return {
+        kind: 'none',
+        reason: 'missing_paths',
+        missing,
+      }
+    }
+
+    try {
+      const cert = loadPemFile(snapshot.certPath)
+      const key = loadPemFile(snapshot.keyPath)
+      const ca = snapshot.caPath ? loadPemFile(snapshot.caPath) : undefined
+
+      logForDebugging('GigaChat: Loaded mTLS credential files')
+
+      return {
+        kind: 'certificate',
+        cert,
+        key,
+        passphrase: snapshot.passphrase,
+        ca: ca ? [ca] : undefined,
+        certPath: snapshot.certPath,
+        keyPath: snapshot.keyPath,
+        caPath: snapshot.caPath,
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      logForDebugging(`GigaChat: Failed to load mTLS files: ${detail}`, {
+        level: 'error',
+      })
+      return {
+        kind: 'none',
+        reason: 'read_failed',
+        detail,
+      }
+    }
+  },
+)
+
+const getGigaChatFetchOptionsMemoized = memoize(
+  (
+    _cacheKey: string,
+    credential: GigaChatResolvedCredential,
+  ): GigaChatFetchOptions => {
+    if (credential.kind !== 'certificate') {
+      return {}
+    }
+
+    const tlsConfig: TLSConfig = {
+      cert: credential.cert,
+      key: credential.key,
+      passphrase: credential.passphrase,
+      ...(credential.ca && { ca: credential.ca }),
+    }
+
+    if (typeof Bun !== 'undefined') {
+      return { tls: tlsConfig }
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const undiciMod = require('undici') as typeof undici
+    const dispatcher = new undiciMod.Agent({
+      connect: {
+        cert: tlsConfig.cert,
+        key: tlsConfig.key,
+        passphrase: tlsConfig.passphrase,
+        ...(tlsConfig.ca && { ca: tlsConfig.ca }),
+      },
+      pipelining: 1,
     })
-    return undefined
-  }
-}
 
-/**
- * Resolve GigaChat credentials from environment variables
- * Supports both certificate-based and API key authentication
- */
-export const resolveGigaChatCredential = memoize(
-  (env: NodeJS.ProcessEnv = process.env): GigaChatResolvedCredential => {
-    const authMode = getGigaChatAuthMode(env)
-
-    // Certificate-based authentication
-    if (authMode === 'certificate' || !authMode) {
-      const certPath = env.GIGACHAT_CERT_PATH?.trim()
-      const keyPath = env.GIGACHAT_KEY_PATH?.trim()
-      const passphrase = env.GIGACHAT_KEY_PASSPHRASE?.trim()
-      const caPath = env.GIGACHAT_CA_PATH?.trim()
-
-      if (certPath && keyPath) {
-        const cert = loadCertificateFile(certPath)
-        const key = loadCertificateFile(keyPath)
-        
-        if (cert && key) {
-          const ca = caPath ? loadCertificateFile(caPath) : undefined
-          
-          return {
-            kind: 'certificate',
-            cert,
-            key,
-            passphrase: passphrase || undefined,
-            ca: ca ? [ca] : undefined,
-          }
-        }
-      }
-    }
-
-    // API key authentication (fallback)
-    if (authMode === 'api-key' || !authMode) {
-      const apiKey = env.GIGACHAT_API_KEY?.trim()
-      if (apiKey) {
-        return {
-          kind: 'api-key',
-          credential: apiKey,
-        }
-      }
-    }
-
-    return { kind: 'none' }
+    return { dispatcher }
   },
 )
 
 /**
- * Clear the GigaChat credential cache
+ * Resolve strict mTLS credentials for GigaChat.
+ * GigaChat integration in OpenClaude intentionally does not support API key mode.
+ */
+export function resolveGigaChatCredential(
+  env: NodeJS.ProcessEnv = process.env,
+): GigaChatResolvedCredential {
+  const snapshot = getGigaChatEnvSnapshot(env)
+  const cacheKey = toGigaChatCacheKey(snapshot)
+  return resolveGigaChatCredentialMemoized(cacheKey, snapshot)
+}
+
+export function getGigaChatFetchOptions(
+  env: NodeJS.ProcessEnv = process.env,
+): GigaChatFetchOptions {
+  const snapshot = getGigaChatEnvSnapshot(env)
+  const cacheKeyPrefix = toGigaChatCacheKey(snapshot)
+  const runtime = typeof Bun !== 'undefined' ? 'bun' : 'node'
+  const credential = resolveGigaChatCredential(env)
+  return getGigaChatFetchOptionsMemoized(
+    `${runtime}\u0000${cacheKeyPrefix}`,
+    credential,
+  )
+}
+
+/**
+ * Clear cached GigaChat credential/TLS state.
  */
 export function clearGigaChatCredentialCache(): void {
-  resolveGigaChatCredential.cache.clear?.()
+  resolveGigaChatCredentialMemoized.cache.clear?.()
+  getGigaChatFetchOptionsMemoized.cache.clear?.()
   logForDebugging('Cleared GigaChat credential cache')
 }

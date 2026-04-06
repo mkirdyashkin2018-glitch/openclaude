@@ -250,6 +250,8 @@ export function buildAPIProviderProperties(): Property[] {
       openai: 'OpenAI-compatible',
       codex: 'Codex',
       gemini: 'Google Gemini',
+      github: 'GitHub Models',
+      gigachat: 'GigaChat',
     }[apiProvider];
     properties.push({
       label: 'API provider',
@@ -392,6 +394,39 @@ export function buildAPIProviderProperties(): Property[] {
       properties.push({
         label: 'Model',
         value: redactSecretValueForDisplay(geminiModel, process.env) ?? geminiModel
+      });
+    }
+  } else if (apiProvider === 'gigachat') {
+    const gigaChatBaseUrl = process.env.GIGACHAT_BASE_URL;
+    if (gigaChatBaseUrl) {
+      properties.push({
+        label: 'GigaChat base URL',
+        value: redactSecretValueForDisplay(gigaChatBaseUrl, process.env) ?? gigaChatBaseUrl
+      });
+    }
+    const gigaChatModel = process.env.GIGACHAT_MODEL;
+    if (gigaChatModel) {
+      properties.push({
+        label: 'Model',
+        value: redactSecretValueForDisplay(gigaChatModel, process.env) ?? gigaChatModel
+      });
+    }
+    if (process.env.GIGACHAT_CERT_PATH) {
+      properties.push({
+        label: 'mTLS client cert',
+        value: process.env.GIGACHAT_CERT_PATH
+      });
+    }
+    if (process.env.GIGACHAT_KEY_PATH) {
+      properties.push({
+        label: 'mTLS client key',
+        value: process.env.GIGACHAT_KEY_PATH
+      });
+    }
+    if (process.env.GIGACHAT_CA_PATH) {
+      properties.push({
+        label: 'mTLS CA cert',
+        value: process.env.GIGACHAT_CA_PATH
       });
     }
   }

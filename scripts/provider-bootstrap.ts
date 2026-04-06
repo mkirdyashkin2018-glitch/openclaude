@@ -10,6 +10,7 @@ import {
 import {
   buildAtomicChatProfileEnv,
   buildCodexProfileEnv,
+  buildGigaChatProfileEnv,
   buildGeminiProfileEnv,
   buildOllamaProfileEnv,
   buildOpenAIProfileEnv,
@@ -37,7 +38,7 @@ function parseArg(name: string): string | null {
 
 function parseProviderArg(): ProviderProfile | 'auto' {
   const p = parseArg('--provider')?.toLowerCase()
-  if (p === 'openai' || p === 'ollama' || p === 'codex' || p === 'gemini' || p === 'atomic-chat') return p
+  if (p === 'openai' || p === 'ollama' || p === 'codex' || p === 'gemini' || p === 'atomic-chat' || p === 'gigachat') return p
   return 'auto'
 }
 
@@ -58,6 +59,10 @@ async function main(): Promise<void> {
   const argModel = parseArg('--model')
   const argBaseUrl = parseArg('--base-url')
   const argApiKey = parseArg('--api-key')
+  const argCertPath = parseArg('--cert-path')
+  const argKeyPath = parseArg('--key-path')
+  const argCaPath = parseArg('--ca-path')
+  const argKeyPassphrase = parseArg('--key-passphrase')
   const goal = normalizeRecommendationGoal(
     parseArg('--goal') || process.env.OPENCLAUDE_PROFILE_GOAL,
   )
@@ -146,6 +151,23 @@ async function main(): Promise<void> {
     }
 
     env = builtEnv
+  } else if (selected === 'gigachat') {
+    const builtEnv = buildGigaChatProfileEnv({
+      model: argModel || null,
+      baseUrl: argBaseUrl || null,
+      certPath: argCertPath || null,
+      keyPath: argKeyPath || null,
+      caPath: argCaPath || null,
+      keyPassphrase: argKeyPassphrase || null,
+      processEnv: process.env,
+    })
+
+    if (!builtEnv) {
+      console.error('GigaChat profile requires cert/key paths. Use --cert-path and --key-path or set GIGACHAT_CERT_PATH and GIGACHAT_KEY_PATH.')
+      process.exit(1)
+    }
+
+    env = builtEnv
   } else {
     const builtEnv = buildOpenAIProfileEnv({
       goal,
@@ -169,7 +191,7 @@ async function main(): Promise<void> {
 
   console.log(`Saved profile: ${selected}`)
   console.log(`Goal: ${goal}`)
-  console.log(`Model: ${profile.env.GEMINI_MODEL || profile.env.OPENAI_MODEL || getGoalDefaultOpenAIModel(goal)}`)
+  console.log(`Model: ${profile.env.GEMINI_MODEL || profile.env.GIGACHAT_MODEL || profile.env.OPENAI_MODEL || getGoalDefaultOpenAIModel(goal)}`)
   console.log(`Path: ${outputPath}`)
   console.log('Next: bun run dev:profile')
 }

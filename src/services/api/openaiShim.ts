@@ -26,7 +26,10 @@ import { isEnvTruthy } from '../../utils/envUtils.js'
 import { resolveGeminiCredential } from '../../utils/geminiAuth.js'
 import { hydrateGeminiAccessTokenFromSecureStorage } from '../../utils/geminiCredentials.js'
 import { hydrateGithubModelsTokenFromSecureStorage } from '../../utils/githubModelsCredentials.js'
-import { resolveGigaChatCredential } from '../../utils/gigachatAuth.js'
+import {
+  getGigaChatFetchOptions,
+  resolveGigaChatCredential,
+} from '../../utils/gigachatAuth.js'
 import {
   codexStreamToAnthropic,
   collectCodexCompletedResponse,
@@ -398,7 +401,9 @@ function normalizeSchemaForOpenAI(
 function convertTools(
   tools: Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>,
 ): OpenAITool[] {
-  const isGemini = isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI)
+  const isGemini =
+    !isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT) &&
+    isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI)
 
   return tools
     .filter(t => t.name !== 'ToolSearchTool') // Not relevant for OpenAI
@@ -931,10 +936,21 @@ class OpenAIShimMessages {
       ...(options?.headers ?? {}),
     }
 
-    const isGemini = isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI)
     const isGigaChat = isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT)
+    const isGemini =
+      !isGigaChat && isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI)
+    if (isGigaChat) {
+      // Never leak first-party auth headers into GigaChat strict mTLS mode.
+      delete headers.Authorization
+      delete headers.authorization
+      delete headers['x-api-key']
+      delete headers['X-Api-Key']
+      delete headers['api-key']
+    }
     const apiKey =
-      this.providerOverride?.apiKey ?? process.env.OPENAI_API_KEY ?? ''
+      isGigaChat
+        ? ''
+        : this.providerOverride?.apiKey ?? process.env.OPENAI_API_KEY ?? ''
     // Detect Azure endpoints by hostname (not raw URL) to prevent bypass via
     // path segments like https://evil.com/cognitiveservices.azure.com/
     let isAzure = false
@@ -959,13 +975,6 @@ class OpenAIShimMessages {
           headers['x-goog-user-project'] = geminiCredential.projectId
         }
       }
-    } else if (isGigaChat) {
-      // GigaChat supports both certificate-based and API key authentication
-      const gigaChatCredential = resolveGigaChatCredential()
-      if (gigaChatCredential.kind === 'api-key' && gigaChatCredential.credential) {
-        headers.Authorization = `Bearer ${gigaChatCredential.credential}`
-      }
-      // For certificate-based auth, credentials are handled via HTTPS agent in fetch override
     }
 
     if (isGithub) {
@@ -1001,73 +1010,32 @@ class OpenAIShimMessages {
       body: JSON.stringify(body),
       signal: options?.signal,
     }
-
-    // For GigaChat certificate-based authentication, configure HTTPS agent with certificates
-    if (isGigaChat) {
-      const gigaChatCredential = resolveGigaChatCredential()
-      if (gigaChatCredential.kind === 'certificate') {
-        // Create a custom fetch that uses HTTPS agent with client certificates
-        const https = await import('node:https')
-        const tls = await import('node:tls')
-        
-        const agentOptions: https.AgentOptions = {
-          cert: gigaChatCredential.cert,
-          key: gigaChatCredential.key,
-          passphrase: gigaChatCredential.passphrase,
-          ca: gigaChatCredential.ca,
-          rejectUnauthorized: true,
-        }
-        
-        const agent = new https.Agent(agentOptions)
-        
-        // Create custom fetch using the agent
-        const agentFetch = async (url: string | URL, init?: RequestInit): Promise<Response> => {
-          return new Promise((resolve, reject) => {
-            const parsedUrl = new URL(url as string)
-            const req = https.request({
-              hostname: parsedUrl.hostname,
-              port: parsedUrl.port || 443,
-              path: parsedUrl.pathname + parsedUrl.search,
-              method: init?.method || 'POST',
-              headers: init?.headers as Record<string, string>,
-              agent,
-            }, (res) => {
-              const chunks: Buffer[] = []
-              res.on('data', chunk => chunks.push(Buffer.from(chunk)))
-              res.on('end', () => {
-                const body = Buffer.concat(chunks).toString()
-                const response = new Response(body, {
-                  status: res.statusCode,
-                  statusText: res.statusMessage,
-                  headers: res.headers as Record<string, string>,
-                })
-                resolve(response)
-              })
-            })
-            req.on('error', reject)
-            if (init?.body) {
-              req.write(init.body)
-            }
-            req.end()
-          })
-        }
-        
-        try {
-          response = await agentFetch(chatCompletionsUrl, fetchInit)
-        } catch (error) {
-          throw new Error(`GigaChat certificate authentication failed: ${error instanceof Error ? error.message : String(error)}`)
-        }
-      }
+    const gigaChatFetchOptions =
+      isGigaChat ? getGigaChatFetchOptions(process.env) : {}
+    const requestInit = {
+      ...fetchInit,
+      ...(isGigaChat ? gigaChatFetchOptions : {}),
     }
 
     const maxAttempts = isGithub ? GITHUB_429_MAX_RETRIES : 1
     let response: Response | undefined
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      // Skip fetch if already executed via certificate auth
-      if (isGigaChat && resolveGigaChatCredential().kind === 'certificate' && response) {
-        break
+    if (isGigaChat) {
+      const credential = resolveGigaChatCredential(process.env)
+      if (credential.kind !== 'certificate') {
+        if (credential.reason === 'missing_paths') {
+          const missing = (credential.missing ?? []).join(', ')
+          throw new Error(
+            `GigaChat mTLS configuration is incomplete: missing ${missing}.`,
+          )
+        }
+        throw new Error(
+          `GigaChat mTLS certificates could not be loaded: ${credential.detail ?? 'unknown error'}`,
+        )
       }
-      response = await fetch(chatCompletionsUrl, fetchInit)
+    }
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      response = await fetch(chatCompletionsUrl, requestInit)
       if (response.ok) {
         return response
       }
@@ -1228,7 +1196,12 @@ export function createOpenAIShimClient(options: {
 
   // When Gemini provider is active, map Gemini env vars to OpenAI-compatible ones
   // so the existing providerConfig.ts infrastructure picks them up correctly.
-  if (isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI)) {
+  if (isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT)) {
+    process.env.OPENAI_BASE_URL ??=
+      process.env.GIGACHAT_BASE_URL ??
+      'https://gigachat.devices.sberbank.ru/api/v1'
+    process.env.OPENAI_MODEL ??= process.env.GIGACHAT_MODEL ?? 'GigaChat-2'
+  } else if (isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI)) {
     process.env.OPENAI_BASE_URL ??=
       process.env.GEMINI_BASE_URL ??
       'https://generativelanguage.googleapis.com/v1beta/openai'
@@ -1244,25 +1217,6 @@ export function createOpenAIShimClient(options: {
     process.env.OPENAI_BASE_URL ??= GITHUB_MODELS_DEFAULT_BASE
     process.env.OPENAI_API_KEY ??=
       process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? ''
-  } else if (isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT)) {
-    // GigaChat uses certificate-based authentication or API key
-    // Map GigaChat base URL and model to OpenAI-compatible env vars
-    process.env.OPENAI_BASE_URL ??=
-      process.env.GIGACHAT_BASE_URL ??
-      'https://gigachat.devices.sberbank.ru/api/v2'
-    
-    const credential = resolveGigaChatCredential()
-    if (credential.kind === 'api-key' && credential.credential) {
-      if (!process.env.OPENAI_API_KEY) {
-        process.env.OPENAI_API_KEY = credential.credential
-      }
-    }
-    // For certificate-based auth, the HTTPS agent will be configured with cert/key
-    // in the fetch override below
-    
-    if (process.env.GIGACHAT_MODEL && !process.env.OPENAI_MODEL) {
-      process.env.OPENAI_MODEL = process.env.GIGACHAT_MODEL
-    }
   }
 
   const beta = new OpenAIShimBeta({

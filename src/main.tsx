@@ -2317,6 +2317,7 @@ async function run(): Promise<CommanderCommand> {
       if (
         nonMcpErrors.length > 0 &&
         !isEnvTruthy(process.env.CLAUDE_CODE_USE_OPENAI) &&
+        !isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT) &&
         !isEnvTruthy(process.env.CLAUDE_CODE_USE_GITHUB)
       ) {
         await launchInvalidSettingsDialog(root, {

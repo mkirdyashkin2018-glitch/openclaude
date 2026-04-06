@@ -7,6 +7,10 @@ import {
   resolveProviderRequest,
   isLocalProviderUrl as isProviderLocalUrl,
 } from '../src/services/api/providerConfig.js'
+import {
+  getGigaChatFetchOptions,
+  resolveGigaChatCredential,
+} from '../src/utils/gigachatAuth.ts'
 
 type CheckResult = {
   ok: boolean
@@ -118,9 +122,14 @@ function isLocalBaseUrl(baseUrl: string): boolean {
 }
 
 const GEMINI_DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai'
+const GIGACHAT_DEFAULT_BASE_URL = 'https://gigachat.devices.sberbank.ru/api/v1'
+const GIGACHAT_DEFAULT_MODEL = 'GigaChat-2'
 const GITHUB_MODELS_DEFAULT_BASE = 'https://models.github.ai/inference'
 
 function currentBaseUrl(): string {
+  if (isTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT)) {
+    return process.env.GIGACHAT_BASE_URL ?? GIGACHAT_DEFAULT_BASE_URL
+  }
   if (isTruthy(process.env.CLAUDE_CODE_USE_GEMINI)) {
     return process.env.GEMINI_BASE_URL ?? GEMINI_DEFAULT_BASE_URL
   }
@@ -182,11 +191,58 @@ function checkGithubEnv(): CheckResult[] {
   return results
 }
 
+function checkGigaChatEnv(): CheckResult[] {
+  const results: CheckResult[] = []
+  const model = process.env.GIGACHAT_MODEL ?? GIGACHAT_DEFAULT_MODEL
+  const baseUrl = process.env.GIGACHAT_BASE_URL ?? GIGACHAT_DEFAULT_BASE_URL
+  const credential = resolveGigaChatCredential(process.env)
+
+  results.push(
+    pass('Provider mode', 'GigaChat provider enabled (strict mTLS).'),
+  )
+  results.push(pass('GIGACHAT_MODEL', model))
+  results.push(pass('GIGACHAT_BASE_URL', baseUrl))
+
+  if (credential.kind === 'certificate') {
+    results.push(pass('GIGACHAT_CERT_PATH', credential.certPath))
+    results.push(pass('GIGACHAT_KEY_PATH', credential.keyPath))
+    if (credential.caPath) {
+      results.push(pass('GIGACHAT_CA_PATH', credential.caPath))
+    }
+    return results
+  }
+
+  if (credential.reason === 'missing_paths') {
+    const missing = credential.missing?.join(', ') ??
+      'GIGACHAT_CERT_PATH, GIGACHAT_KEY_PATH'
+    results.push(
+      fail(
+        'GigaChat mTLS',
+        `Missing required variables: ${missing}.`,
+      ),
+    )
+    return results
+  }
+
+  results.push(
+    fail(
+      'GigaChat mTLS',
+      `Failed to read certificate files: ${credential.detail ?? 'unknown error'}.`,
+    ),
+  )
+  return results
+}
+
 function checkOpenAIEnv(): CheckResult[] {
   const results: CheckResult[] = []
+  const useGigaChat = isTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT)
   const useGemini = isTruthy(process.env.CLAUDE_CODE_USE_GEMINI)
   const useGithub = isTruthy(process.env.CLAUDE_CODE_USE_GITHUB)
   const useOpenAI = isTruthy(process.env.CLAUDE_CODE_USE_OPENAI)
+
+  if (useGigaChat) {
+    return checkGigaChatEnv()
+  }
 
   if (useGemini) {
     return checkGeminiEnv()
@@ -265,11 +321,12 @@ function checkOpenAIEnv(): CheckResult[] {
 }
 
 async function checkBaseUrlReachability(): Promise<CheckResult> {
+  const useGigaChat = isTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT)
   const useGemini = isTruthy(process.env.CLAUDE_CODE_USE_GEMINI)
   const useOpenAI = isTruthy(process.env.CLAUDE_CODE_USE_OPENAI)
   const useGithub = isTruthy(process.env.CLAUDE_CODE_USE_GITHUB)
 
-  if (!useGemini && !useOpenAI && !useGithub) {
+  if (!useGigaChat && !useGemini && !useOpenAI && !useGithub) {
     return pass('Provider reachability', 'Skipped (OpenAI-compatible mode disabled).')
   }
 
@@ -281,14 +338,19 @@ async function checkBaseUrlReachability(): Promise<CheckResult> {
   }
 
   const geminiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta/openai'
+  const gigaChatBaseUrl = process.env.GIGACHAT_BASE_URL ?? GIGACHAT_DEFAULT_BASE_URL
   const resolvedBaseUrl = useGemini
     ? (process.env.GEMINI_BASE_URL ?? geminiBaseUrl)
+    : useGigaChat
+      ? gigaChatBaseUrl
     : undefined
   const request = resolveProviderRequest({
-    model: process.env.OPENAI_MODEL,
+    model: useGigaChat ? process.env.GIGACHAT_MODEL : process.env.OPENAI_MODEL,
     baseUrl: resolvedBaseUrl ?? process.env.OPENAI_BASE_URL,
   })
-  const endpoint = request.transport === 'codex_responses'
+  const endpoint = useGigaChat
+    ? `${(resolvedBaseUrl ?? gigaChatBaseUrl).replace(/\/+$/, '')}/models`
+    : request.transport === 'codex_responses'
     ? `${request.baseUrl}/responses`
     : `${request.baseUrl}/models`
 
@@ -335,6 +397,7 @@ async function checkBaseUrlReachability(): Promise<CheckResult> {
       headers,
       body,
       signal: controller.signal,
+      ...(useGigaChat ? getGigaChatFetchOptions(process.env) : {}),
     })
 
     if (response.status === 200 || response.status === 401 || response.status === 403) {
@@ -372,6 +435,7 @@ function isAtomicChatUrl(baseUrl: string): boolean {
 function checkOllamaProcessorMode(): CheckResult {
   if (
     !isTruthy(process.env.CLAUDE_CODE_USE_OPENAI) ||
+    isTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT) ||
     isTruthy(process.env.CLAUDE_CODE_USE_GEMINI) ||
     isTruthy(process.env.CLAUDE_CODE_USE_GITHUB)
   ) {
@@ -417,6 +481,19 @@ function checkOllamaProcessorMode(): CheckResult {
 }
 
 function serializeSafeEnvSummary(): Record<string, string | boolean> {
+  if (isTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT)) {
+    return {
+      CLAUDE_CODE_USE_GIGACHAT: true,
+      GIGACHAT_MODEL:
+        process.env.GIGACHAT_MODEL ?? '(unset, default: GigaChat-2)',
+      GIGACHAT_BASE_URL:
+        process.env.GIGACHAT_BASE_URL ??
+        'https://gigachat.devices.sberbank.ru/api/v1',
+      GIGACHAT_CERT_PATH_SET: Boolean(process.env.GIGACHAT_CERT_PATH),
+      GIGACHAT_KEY_PATH_SET: Boolean(process.env.GIGACHAT_KEY_PATH),
+      GIGACHAT_CA_PATH_SET: Boolean(process.env.GIGACHAT_CA_PATH),
+    }
+  }
   if (isTruthy(process.env.CLAUDE_CODE_USE_GEMINI)) {
     return {
       CLAUDE_CODE_USE_GEMINI: true,

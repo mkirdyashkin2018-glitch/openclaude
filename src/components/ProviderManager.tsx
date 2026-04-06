@@ -37,11 +37,19 @@ type Screen =
   | 'select-edit'
   | 'select-delete'
 
-type DraftField = 'name' | 'baseUrl' | 'model' | 'apiKey'
+type DraftField =
+  | 'name'
+  | 'baseUrl'
+  | 'model'
+  | 'apiKey'
+  | 'certPath'
+  | 'keyPath'
+  | 'caPath'
+  | 'keyPassphrase'
 
 type ProviderDraft = Record<DraftField, string>
 
-const FORM_STEPS: Array<{
+const OPENAI_COMPAT_FORM_STEPS: Array<{
   key: DraftField
   label: string
   placeholder: string
@@ -75,12 +83,83 @@ const FORM_STEPS: Array<{
   },
 ]
 
+const GIGACHAT_FORM_STEPS: Array<{
+  key: DraftField
+  label: string
+  placeholder: string
+  helpText: string
+  optional?: boolean
+}> = [
+  {
+    key: 'name',
+    label: 'Provider name',
+    placeholder: 'e.g. GigaChat Prod',
+    helpText: 'A short label shown in /provider and startup setup.',
+  },
+  {
+    key: 'baseUrl',
+    label: 'Base URL',
+    placeholder: 'https://gigachat.devices.sberbank.ru/api/v1',
+    helpText: 'GigaChat OpenAI-compatible base URL.',
+  },
+  {
+    key: 'model',
+    label: 'Default model',
+    placeholder: 'e.g. GigaChat-2',
+    helpText: 'Model name to use when this profile is active.',
+  },
+  {
+    key: 'certPath',
+    label: 'Client cert path',
+    placeholder: '/path/to/client.crt',
+    helpText: 'PEM client certificate path for mTLS.',
+  },
+  {
+    key: 'keyPath',
+    label: 'Client key path',
+    placeholder: '/path/to/client.key',
+    helpText: 'PEM private key path for mTLS.',
+  },
+  {
+    key: 'caPath',
+    label: 'CA cert path',
+    placeholder: '/path/to/ca.crt',
+    helpText: 'Optional custom CA bundle path.',
+    optional: true,
+  },
+  {
+    key: 'keyPassphrase',
+    label: 'Key passphrase',
+    placeholder: 'Leave empty if key is unencrypted',
+    helpText: 'Optional passphrase for encrypted private key.',
+    optional: true,
+  },
+]
+
+function getFormSteps(
+  provider: ProviderProfile['provider'],
+): Array<{
+  key: DraftField
+  label: string
+  placeholder: string
+  helpText: string
+  optional?: boolean
+}> {
+  return provider === 'gigachat'
+    ? GIGACHAT_FORM_STEPS
+    : OPENAI_COMPAT_FORM_STEPS
+}
+
 function toDraft(profile: ProviderProfile): ProviderDraft {
   return {
     name: profile.name,
     baseUrl: profile.baseUrl,
     model: profile.model,
     apiKey: profile.apiKey ?? '',
+    certPath: profile.certPath ?? '',
+    keyPath: profile.keyPath ?? '',
+    caPath: profile.caPath ?? '',
+    keyPassphrase: profile.keyPassphrase ?? '',
   }
 }
 
@@ -91,14 +170,29 @@ function presetToDraft(preset: ProviderPreset): ProviderDraft {
     baseUrl: defaults.baseUrl,
     model: defaults.model,
     apiKey: defaults.apiKey ?? '',
+    certPath: defaults.certPath ?? '',
+    keyPath: defaults.keyPath ?? '',
+    caPath: defaults.caPath ?? '',
+    keyPassphrase: defaults.keyPassphrase ?? '',
   }
 }
 
 function profileSummary(profile: ProviderProfile, isActive: boolean): string {
   const activeSuffix = isActive ? ' (active)' : ''
-  const keyInfo = profile.apiKey ? 'key set' : 'no key'
+  const keyInfo =
+    profile.provider === 'gigachat'
+      ? profile.certPath && profile.keyPath
+        ? 'mTLS cert+key set'
+        : 'mTLS incomplete'
+      : profile.apiKey
+        ? 'key set'
+        : 'no key'
   const providerKind =
-    profile.provider === 'anthropic' ? 'anthropic' : 'openai-compatible'
+    profile.provider === 'anthropic'
+      ? 'anthropic'
+      : profile.provider === 'gigachat'
+        ? 'gigachat'
+        : 'openai-compatible'
   return `${providerKind} · ${profile.baseUrl} · ${profile.model} · ${keyInfo}${activeSuffix}`
 }
 
@@ -122,7 +216,8 @@ export function ProviderManager({ mode, onDone }: Props): React.ReactNode {
   const [statusMessage, setStatusMessage] = React.useState<string | undefined>()
   const [errorMessage, setErrorMessage] = React.useState<string | undefined>()
 
-  const currentStep = FORM_STEPS[formStepIndex] ?? FORM_STEPS[0]
+  const formSteps = React.useMemo(() => getFormSteps(draftProvider), [draftProvider])
+  const currentStep = formSteps[formStepIndex] ?? formSteps[0]
   const currentStepKey = currentStep.key
   const currentValue = draft[currentStepKey]
 
@@ -175,7 +270,12 @@ export function ProviderManager({ mode, onDone }: Props): React.ReactNode {
       name: draft.name,
       baseUrl: draft.baseUrl,
       model: draft.model,
-      apiKey: draft.apiKey,
+      apiKey: draftProvider === 'gigachat' ? undefined : draft.apiKey,
+      certPath: draftProvider === 'gigachat' ? draft.certPath : undefined,
+      keyPath: draftProvider === 'gigachat' ? draft.keyPath : undefined,
+      caPath: draftProvider === 'gigachat' ? draft.caPath : undefined,
+      keyPassphrase:
+        draftProvider === 'gigachat' ? draft.keyPassphrase : undefined,
     }
 
     const saved = editingProfileId
@@ -225,9 +325,9 @@ export function ProviderManager({ mode, onDone }: Props): React.ReactNode {
     setDraft(nextDraft)
     setErrorMessage(undefined)
 
-    if (formStepIndex < FORM_STEPS.length - 1) {
+    if (formStepIndex < formSteps.length - 1) {
       const nextIndex = formStepIndex + 1
-      const nextKey = FORM_STEPS[nextIndex]?.key ?? 'name'
+      const nextKey = formSteps[nextIndex]?.key ?? 'name'
       setFormStepIndex(nextIndex)
       setCursorOffset(nextDraft[nextKey].length)
       return
@@ -241,7 +341,7 @@ export function ProviderManager({ mode, onDone }: Props): React.ReactNode {
 
     if (formStepIndex > 0) {
       const nextIndex = formStepIndex - 1
-      const nextKey = FORM_STEPS[nextIndex]?.key ?? 'name'
+      const nextKey = formSteps[nextIndex]?.key ?? 'name'
       setFormStepIndex(nextIndex)
       setCursorOffset(draft[nextKey].length)
       return
@@ -291,6 +391,11 @@ export function ProviderManager({ mode, onDone }: Props): React.ReactNode {
         value: 'gemini',
         label: 'Google Gemini',
         description: 'Gemini OpenAI-compatible endpoint',
+      },
+      {
+        value: 'gigachat',
+        label: 'GigaChat',
+        description: 'GigaChat OpenAI-compatible endpoint (mTLS cert/key)',
       },
       {
         value: 'together',
@@ -379,10 +484,12 @@ export function ProviderManager({ mode, onDone }: Props): React.ReactNode {
           Provider type:{' '}
           {draftProvider === 'anthropic'
             ? 'Anthropic native API'
-            : 'OpenAI-compatible API'}
+            : draftProvider === 'gigachat'
+              ? 'GigaChat (mTLS cert/key auth)'
+              : 'OpenAI-compatible API'}
         </Text>
         <Text dimColor>
-          Step {formStepIndex + 1} of {FORM_STEPS.length}: {currentStep.label}
+          Step {formStepIndex + 1} of {formSteps.length}: {currentStep.label}
         </Text>
         <Box flexDirection="row" gap={1}>
           <Text>{figures.pointer}</Text>
@@ -534,7 +641,7 @@ export function ProviderManager({ mode, onDone }: Props): React.ReactNode {
         profile.id === activeProfileId
           ? `${profile.name} (active)`
           : profile.name,
-      description: `${profile.provider === 'anthropic' ? 'anthropic' : 'openai-compatible'} · ${profile.baseUrl} · ${profile.model}`,
+      description: `${profile.provider === 'anthropic' ? 'anthropic' : profile.provider === 'gigachat' ? 'gigachat' : 'openai-compatible'} · ${profile.baseUrl} · ${profile.model}`,
     }))
 
     return (

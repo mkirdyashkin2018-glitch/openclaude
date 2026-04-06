@@ -6,6 +6,7 @@
  *
  * Usage:
  *   openclaude --provider openai --model gpt-4o
+ *   openclaude --provider gigachat --model GigaChat-2
  *   openclaude --provider gemini --model gemini-2.0-flash
  *   openclaude --provider ollama --model llama3.2
  *   openclaude --provider anthropic   (default, no-op)
@@ -14,6 +15,7 @@
 export const VALID_PROVIDERS = [
   'anthropic',
   'openai',
+  'gigachat',
   'gemini',
   'github',
   'bedrock',
@@ -51,12 +53,16 @@ export function applyProviderFlagFromArgs(
  * Extract the value of --model from argv.
  * Returns null if absent.
  */
-function parseModelFlag(args: string[]): string | null {
-  const idx = args.indexOf('--model')
+function parseStringFlag(args: string[], flag: string): string | null {
+  const idx = args.indexOf(flag)
   if (idx === -1) return null
   const value = args[idx + 1]
   if (!value || value.startsWith('--')) return null
   return value
+}
+
+function parseModelFlag(args: string[]): string | null {
+  return parseStringFlag(args, '--model')
 }
 
 /**
@@ -78,6 +84,19 @@ export function applyProviderFlag(
   }
 
   const model = parseModelFlag(args)
+  const certPath = parseStringFlag(args, '--cert-path')
+  const keyPath = parseStringFlag(args, '--key-path')
+  const caPath = parseStringFlag(args, '--ca-path')
+  const keyPassphrase = parseStringFlag(args, '--key-passphrase')
+
+  // Ensure --provider deterministically selects exactly one backend mode.
+  delete process.env.CLAUDE_CODE_USE_OPENAI
+  delete process.env.CLAUDE_CODE_USE_GIGACHAT
+  delete process.env.CLAUDE_CODE_USE_GEMINI
+  delete process.env.CLAUDE_CODE_USE_GITHUB
+  delete process.env.CLAUDE_CODE_USE_BEDROCK
+  delete process.env.CLAUDE_CODE_USE_VERTEX
+  delete process.env.CLAUDE_CODE_USE_FOUNDRY
 
   switch (provider as ProviderFlagName) {
     case 'anthropic':
@@ -87,6 +106,18 @@ export function applyProviderFlag(
     case 'openai':
       process.env.CLAUDE_CODE_USE_OPENAI = '1'
       if (model) process.env.OPENAI_MODEL ??= model
+      break
+
+    case 'gigachat':
+      process.env.CLAUDE_CODE_USE_GIGACHAT = '1'
+      delete process.env.CLAUDE_CODE_USE_OPENAI
+      delete process.env.CLAUDE_CODE_USE_GEMINI
+      delete process.env.CLAUDE_CODE_USE_GITHUB
+      if (model) process.env.GIGACHAT_MODEL ??= model
+      if (certPath) process.env.GIGACHAT_CERT_PATH ??= certPath
+      if (keyPath) process.env.GIGACHAT_KEY_PATH ??= keyPath
+      if (caPath) process.env.GIGACHAT_CA_PATH ??= caPath
+      if (keyPassphrase) process.env.GIGACHAT_KEY_PASSPHRASE ??= keyPassphrase
       break
 
     case 'gemini':
