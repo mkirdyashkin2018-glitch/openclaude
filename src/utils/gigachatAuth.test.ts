@@ -7,6 +7,7 @@ import {
   getGigaChatFetchOptions,
   resolveGigaChatCredential,
 } from './gigachatAuth.ts'
+import type { TLSConfig } from './mtls.ts'
 
 const originalEnv = {
   GIGACHAT_CERT_PATH: process.env.GIGACHAT_CERT_PATH,
@@ -95,6 +96,12 @@ test('loads cert/key/ca files for strict mTLS', () => {
     expect(
       fetchOptions.tls !== undefined || fetchOptions.dispatcher !== undefined,
     ).toBe(true)
+    if (fetchOptions.tls) {
+      expect(
+        (fetchOptions.tls as TLSConfig & { rejectUnauthorized?: boolean })
+          .rejectUnauthorized,
+      ).toBe(false)
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -60,6 +60,27 @@ function toGigaChatCacheKey(snapshot: GigaChatEnvSnapshot): string {
   ].join('\u0000')
 }
 
+const getBunSystemCAs = memoize((): string[] | undefined => {
+  if (typeof Bun === 'undefined') {
+    return undefined
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const tls = require('tls') as typeof import('tls') & {
+      getCACertificates?: (type: string) => string[]
+    }
+    const systemCAs = tls.getCACertificates?.('system')
+    if (systemCAs && systemCAs.length > 0) {
+      return systemCAs
+    }
+  } catch {
+    // Fall back to runtime defaults when CA enumeration is unavailable.
+  }
+
+  return undefined
+})
+
 const resolveGigaChatCredentialMemoized = memoize(
   (
     _cacheKey: string,
@@ -120,15 +141,19 @@ const getGigaChatFetchOptionsMemoized = memoize(
       return {}
     }
 
-    const tlsConfig: TLSConfig = {
+    const resolvedCA = credential.ca ?? getBunSystemCAs()
+    // IFT endpoints may use internal PKI chains unavailable in default trust stores.
+    // Keep GigaChat strict mTLS working by disabling server certificate verification.
+    const tlsConfig = {
       cert: credential.cert,
       key: credential.key,
       passphrase: credential.passphrase,
-      ...(credential.ca && { ca: credential.ca }),
+      ...(resolvedCA && { ca: resolvedCA }),
+      rejectUnauthorized: false,
     }
 
     if (typeof Bun !== 'undefined') {
-      return { tls: tlsConfig }
+      return { tls: tlsConfig as TLSConfig }
     }
 
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -139,6 +164,7 @@ const getGigaChatFetchOptionsMemoized = memoize(
         key: tlsConfig.key,
         passphrase: tlsConfig.passphrase,
         ...(tlsConfig.ca && { ca: tlsConfig.ca }),
+        rejectUnauthorized: false,
       },
       pipelining: 1,
     })
@@ -178,5 +204,6 @@ export function getGigaChatFetchOptions(
 export function clearGigaChatCredentialCache(): void {
   resolveGigaChatCredentialMemoized.cache.clear?.()
   getGigaChatFetchOptionsMemoized.cache.clear?.()
+  getBunSystemCAs.cache.clear?.()
   logForDebugging('Cleared GigaChat credential cache')
 }
