@@ -183,10 +183,14 @@ export type OutputStyle = string
 export type ProviderProfile = {
   id: string
   name: string
-  provider: 'openai' | 'anthropic'
+  provider: 'openai' | 'anthropic' | 'gigachat'
   baseUrl: string
   model: string
   apiKey?: string
+  certPath?: string
+  keyPath?: string
+  caPath?: string
+  keyPassphrase?: string
 }
 
 export type GlobalConfig = {

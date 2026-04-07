@@ -50,7 +50,7 @@ function parseLaunchOptions(argv: string[]): LaunchOptions {
       continue
     }
 
-    if ((lower === 'auto' || lower === 'openai' || lower === 'ollama' || lower === 'codex' || lower === 'gemini' || lower === 'atomic-chat') && requestedProfile === 'auto') {
+    if ((lower === 'auto' || lower === 'openai' || lower === 'ollama' || lower === 'codex' || lower === 'gemini' || lower === 'atomic-chat' || lower === 'gigachat') && requestedProfile === 'auto') {
       requestedProfile = lower as ProviderProfile | 'auto'
       continue
     }
@@ -128,6 +128,8 @@ function printSummary(profile: ProviderProfile): void {
     console.log('Using configured Codex/OpenAI-compatible provider settings.')
   } else if (profile === 'atomic-chat') {
     console.log('Using configured Atomic Chat provider settings.')
+  } else if (profile === 'gigachat') {
+    console.log('Using configured GigaChat provider settings (strict mTLS).')
   } else if (profile === 'ollama') {
     console.log('Using configured Ollama provider settings.')
   } else {
@@ -139,7 +141,7 @@ async function main(): Promise<void> {
   const options = parseLaunchOptions(process.argv.slice(2))
   const requestedProfile = options.requestedProfile
   if (!requestedProfile) {
-    console.error('Usage: bun run scripts/provider-launch.ts [openai|ollama|codex|gemini|atomic-chat|auto] [--fast] [--goal <latency|balanced|coding>] [-- <cli args>]')
+    console.error('Usage: bun run scripts/provider-launch.ts [openai|ollama|codex|gemini|gigachat|atomic-chat|auto] [--fast] [--goal <latency|balanced|coding>] [-- <cli args>]')
     process.exit(1)
   }
 
@@ -226,6 +228,13 @@ async function main(): Promise<void> {
     }
   }
 
+  if (profile === 'gigachat') {
+    if (!env.GIGACHAT_CERT_PATH?.trim() || !env.GIGACHAT_KEY_PATH?.trim()) {
+      console.error('GIGACHAT_CERT_PATH and GIGACHAT_KEY_PATH are required for gigachat profile. Run: bun run profile:init -- --provider gigachat --cert-path <path> --key-path <path>')
+      process.exit(1)
+    }
+  }
+
   printSummary(profile)
 
   const doctorCode = await runProcess('bun', ['run', 'scripts/system-check.ts'], env)
@@ -239,7 +248,7 @@ async function main(): Promise<void> {
     process.exit(buildCode)
   }
 
-  const devCode = await runProcess('node', ['dist/cli.mjs', ...options.passthroughArgs], env)
+  const devCode = await runProcess('bun', ['dist/cli.mjs', ...options.passthroughArgs], env)
   process.exit(devCode)
 }
 

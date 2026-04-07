@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createOpenAIShimClient } from './openaiShim.ts'
 
 type FetchType = typeof globalThis.fetch
@@ -7,6 +10,13 @@ const originalEnv = {
   OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
   OPENAI_MODEL: process.env.OPENAI_MODEL,
+  CLAUDE_CODE_USE_GIGACHAT: process.env.CLAUDE_CODE_USE_GIGACHAT,
+  GIGACHAT_BASE_URL: process.env.GIGACHAT_BASE_URL,
+  GIGACHAT_MODEL: process.env.GIGACHAT_MODEL,
+  GIGACHAT_CERT_PATH: process.env.GIGACHAT_CERT_PATH,
+  GIGACHAT_KEY_PATH: process.env.GIGACHAT_KEY_PATH,
+  GIGACHAT_CA_PATH: process.env.GIGACHAT_CA_PATH,
+  GIGACHAT_KEY_PASSPHRASE: process.env.GIGACHAT_KEY_PASSPHRASE,
   CLAUDE_CODE_USE_GEMINI: process.env.CLAUDE_CODE_USE_GEMINI,
   GEMINI_API_KEY: process.env.GEMINI_API_KEY,
   GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
@@ -70,6 +80,13 @@ beforeEach(() => {
   process.env.OPENAI_BASE_URL = 'http://example.test/v1'
   process.env.OPENAI_API_KEY = 'test-key'
   delete process.env.OPENAI_MODEL
+  delete process.env.CLAUDE_CODE_USE_GIGACHAT
+  delete process.env.GIGACHAT_BASE_URL
+  delete process.env.GIGACHAT_MODEL
+  delete process.env.GIGACHAT_CERT_PATH
+  delete process.env.GIGACHAT_KEY_PATH
+  delete process.env.GIGACHAT_CA_PATH
+  delete process.env.GIGACHAT_KEY_PASSPHRASE
   delete process.env.CLAUDE_CODE_USE_GEMINI
   delete process.env.GEMINI_API_KEY
   delete process.env.GOOGLE_API_KEY
@@ -84,6 +101,13 @@ afterEach(() => {
   restoreEnv('OPENAI_BASE_URL', originalEnv.OPENAI_BASE_URL)
   restoreEnv('OPENAI_API_KEY', originalEnv.OPENAI_API_KEY)
   restoreEnv('OPENAI_MODEL', originalEnv.OPENAI_MODEL)
+  restoreEnv('CLAUDE_CODE_USE_GIGACHAT', originalEnv.CLAUDE_CODE_USE_GIGACHAT)
+  restoreEnv('GIGACHAT_BASE_URL', originalEnv.GIGACHAT_BASE_URL)
+  restoreEnv('GIGACHAT_MODEL', originalEnv.GIGACHAT_MODEL)
+  restoreEnv('GIGACHAT_CERT_PATH', originalEnv.GIGACHAT_CERT_PATH)
+  restoreEnv('GIGACHAT_KEY_PATH', originalEnv.GIGACHAT_KEY_PATH)
+  restoreEnv('GIGACHAT_CA_PATH', originalEnv.GIGACHAT_CA_PATH)
+  restoreEnv('GIGACHAT_KEY_PASSPHRASE', originalEnv.GIGACHAT_KEY_PASSPHRASE)
   restoreEnv('CLAUDE_CODE_USE_GEMINI', originalEnv.CLAUDE_CODE_USE_GEMINI)
   restoreEnv('GEMINI_API_KEY', originalEnv.GEMINI_API_KEY)
   restoreEnv('GOOGLE_API_KEY', originalEnv.GOOGLE_API_KEY)
@@ -93,6 +117,313 @@ afterEach(() => {
   restoreEnv('GEMINI_MODEL', originalEnv.GEMINI_MODEL)
   restoreEnv('GOOGLE_CLOUD_PROJECT', originalEnv.GOOGLE_CLOUD_PROJECT)
   globalThis.fetch = originalFetch
+})
+
+test('uses strict mTLS mode for GigaChat without Bearer authorization', async () => {
+  const certDir = mkdtempSync(join(tmpdir(), 'openclaude-gigachat-shim-'))
+  try {
+    const certPath = join(certDir, 'client.crt')
+    const keyPath = join(certDir, 'client.key')
+    writeFileSync(
+      certPath,
+      '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n',
+    )
+    writeFileSync(
+      keyPath,
+      '-----BEGIN PRIVATE KEY-----\nTEST\n-----END PRIVATE KEY-----\n',
+    )
+
+    let requestUrl: string | undefined
+    let capturedAuthorization: string | null = null
+    let capturedModel: string | undefined
+    globalThis.fetch = (async (input, init) => {
+      requestUrl =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
+      const headers = init?.headers as Record<string, string> | undefined
+      capturedAuthorization =
+        headers?.Authorization ?? headers?.authorization ?? null
+      capturedModel = JSON.parse(String(init?.body)).model
+
+      return new Response(
+        JSON.stringify({
+          id: 'chatcmpl-gigachat',
+          model: 'GigaChat-2',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'ok',
+              },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: {
+            prompt_tokens: 4,
+            completion_tokens: 2,
+            total_tokens: 6,
+          },
+        }),
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+      )
+    }) as FetchType
+
+    process.env.CLAUDE_CODE_USE_GIGACHAT = '1'
+    process.env.GIGACHAT_BASE_URL = 'https://gigachat.devices.sberbank.ru/api/v1'
+    process.env.GIGACHAT_MODEL = 'GigaChat-2'
+    process.env.GIGACHAT_CERT_PATH = certPath
+    process.env.GIGACHAT_KEY_PATH = keyPath
+    process.env.OPENAI_API_KEY = 'sk-should-not-be-used'
+    delete process.env.OPENAI_BASE_URL
+    delete process.env.OPENAI_MODEL
+
+    const client = createOpenAIShimClient({}) as OpenAIShimClient
+
+    await client.beta.messages.create({
+      model: 'GigaChat-2',
+      messages: [{ role: 'user', content: 'hello' }],
+      max_tokens: 32,
+      stream: false,
+    })
+
+    expect(requestUrl).toBe(
+      'https://gigachat.devices.sberbank.ru/api/v1/chat/completions',
+    )
+    expect(capturedAuthorization).toBeNull()
+    expect(capturedModel).toBe('GigaChat-2')
+  } finally {
+    rmSync(certDir, { recursive: true, force: true })
+  }
+})
+
+test('maps GigaChat tool payloads to legacy function-calling fields', async () => {
+  const certDir = mkdtempSync(join(tmpdir(), 'openclaude-gigachat-legacy-'))
+  try {
+    const certPath = join(certDir, 'client.crt')
+    const keyPath = join(certDir, 'client.key')
+    writeFileSync(
+      certPath,
+      '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n',
+    )
+    writeFileSync(
+      keyPath,
+      '-----BEGIN PRIVATE KEY-----\nTEST\n-----END PRIVATE KEY-----\n',
+    )
+
+    let requestBody: Record<string, unknown> | undefined
+    globalThis.fetch = (async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body))
+      const chunks = makeStreamChunks([
+        {
+          id: 'chatcmpl-legacy',
+          object: 'chat.completion.chunk',
+          model: 'GigaChat-2',
+          choices: [
+            {
+              index: 0,
+              delta: { role: 'assistant', content: 'ok' },
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: 'chatcmpl-legacy',
+          object: 'chat.completion.chunk',
+          model: 'GigaChat-2',
+          choices: [
+            {
+              index: 0,
+              delta: {},
+              finish_reason: 'stop',
+            },
+          ],
+        },
+      ])
+      return makeSseResponse(chunks)
+    }) as FetchType
+
+    process.env.CLAUDE_CODE_USE_GIGACHAT = '1'
+    process.env.GIGACHAT_BASE_URL = 'https://gigachat.devices.sberbank.ru/api/v1'
+    process.env.GIGACHAT_MODEL = 'GigaChat-2'
+    process.env.GIGACHAT_CERT_PATH = certPath
+    process.env.GIGACHAT_KEY_PATH = keyPath
+    delete process.env.OPENAI_BASE_URL
+    delete process.env.OPENAI_MODEL
+
+    const client = createOpenAIShimClient({}) as OpenAIShimClient
+
+    const response = await client.beta.messages
+      .create({
+        model: 'GigaChat-2',
+        messages: [
+          { role: 'user', content: 'run command' },
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'call_1',
+                name: 'Bash',
+                input: { command: 'pwd' },
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call_1',
+                content: '/tmp',
+              },
+            ],
+          },
+        ],
+        tools: [
+          {
+            name: 'Bash',
+            description: 'Run shell commands',
+            input_schema: {
+              type: 'object',
+              properties: {
+                command: { type: 'string' },
+              },
+            },
+          },
+        ],
+        tool_choice: { type: 'any' },
+        max_tokens: 32,
+        stream: true,
+      })
+      .withResponse()
+
+    for await (const _ of response.data) {
+      // consume stream
+    }
+
+    expect(requestBody?.max_tokens).toBe(32)
+    expect(requestBody).not.toHaveProperty('max_completion_tokens')
+    expect(requestBody).not.toHaveProperty('stream_options')
+    expect(requestBody).not.toHaveProperty('tools')
+    expect(requestBody).not.toHaveProperty('tool_choice')
+    expect(requestBody?.functions).toEqual([
+      {
+        name: 'Bash',
+        description: 'Run shell commands',
+        parameters: {
+          type: 'object',
+          properties: {
+            command: { type: 'string' },
+          },
+          required: [],
+        },
+      },
+    ])
+    expect(requestBody?.function_call).toBe('auto')
+
+    const messages = requestBody?.messages as
+      | Array<Record<string, unknown>>
+      | undefined
+    const assistantFunctionCall = messages?.find(
+      msg =>
+        msg.role === 'assistant' &&
+        typeof msg.function_call === 'object' &&
+        msg.function_call !== null,
+    ) as { function_call?: { name?: string } } | undefined
+    expect(assistantFunctionCall?.function_call?.name).toBe('Bash')
+
+    const functionResult = messages?.find(msg => msg.role === 'function') as
+      | { name?: string; content?: string }
+      | undefined
+    expect(functionResult?.name).toBe('Bash')
+    expect(functionResult?.content).toBe('/tmp')
+  } finally {
+    rmSync(certDir, { recursive: true, force: true })
+  }
+})
+
+test('maps GigaChat legacy function_call responses to tool_use blocks', async () => {
+  const certDir = mkdtempSync(join(tmpdir(), 'openclaude-gigachat-fnresp-'))
+  try {
+    const certPath = join(certDir, 'client.crt')
+    const keyPath = join(certDir, 'client.key')
+    writeFileSync(
+      certPath,
+      '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n',
+    )
+    writeFileSync(
+      keyPath,
+      '-----BEGIN PRIVATE KEY-----\nTEST\n-----END PRIVATE KEY-----\n',
+    )
+
+    globalThis.fetch = (async () => {
+      return new Response(
+        JSON.stringify({
+          id: 'chatcmpl-gigachat',
+          model: 'GigaChat-2',
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '',
+                function_call: {
+                  name: 'Bash',
+                  arguments: '{"command":"pwd"}',
+                },
+              },
+              finish_reason: 'function_call',
+            },
+          ],
+          usage: {
+            prompt_tokens: 5,
+            completion_tokens: 2,
+            total_tokens: 7,
+          },
+        }),
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+      )
+    }) as FetchType
+
+    process.env.CLAUDE_CODE_USE_GIGACHAT = '1'
+    process.env.GIGACHAT_BASE_URL = 'https://gigachat.devices.sberbank.ru/api/v1'
+    process.env.GIGACHAT_MODEL = 'GigaChat-2'
+    process.env.GIGACHAT_CERT_PATH = certPath
+    process.env.GIGACHAT_KEY_PATH = keyPath
+    delete process.env.OPENAI_BASE_URL
+    delete process.env.OPENAI_MODEL
+
+    const client = createOpenAIShimClient({}) as OpenAIShimClient
+
+    const response = await client.beta.messages.create({
+      model: 'GigaChat-2',
+      messages: [{ role: 'user', content: 'hello' }],
+      max_tokens: 32,
+      stream: false,
+    }) as {
+      stop_reason?: string
+      content?: Array<{ type?: string; name?: string; input?: Record<string, unknown> }>
+    }
+
+    expect(response.stop_reason).toBe('tool_use')
+    expect(response.content?.[0]).toMatchObject({
+      type: 'tool_use',
+      name: 'Bash',
+      input: { command: 'pwd' },
+    })
+  } finally {
+    rmSync(certDir, { recursive: true, force: true })
+  }
 })
 
 test('preserves usage from final OpenAI stream chunk with empty choices', async () => {

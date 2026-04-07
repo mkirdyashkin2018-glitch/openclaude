@@ -69,6 +69,19 @@ export OPENAI_BASE_URL=https://api.deepseek.com/v1
 export OPENAI_MODEL=deepseek-chat
 ```
 
+### GigaChat (strict mTLS)
+
+```bash
+export CLAUDE_CODE_USE_GIGACHAT=1
+export GIGACHAT_BASE_URL=https://gigachat.devices.sberbank.ru/api/v1
+export GIGACHAT_MODEL=GigaChat-2
+export GIGACHAT_CERT_PATH=/path/to/client.crt
+export GIGACHAT_KEY_PATH=/path/to/client.key
+# optional
+export GIGACHAT_CA_PATH=/path/to/ca.crt
+export GIGACHAT_KEY_PASSPHRASE=...
+```
+
 ### Google Gemini via OpenRouter
 
 ```bash
@@ -160,6 +173,13 @@ export OPENAI_MODEL=gpt-4o
 | `OPENAI_API_KEY` | Yes* | Your API key (`*` not needed for local models like Ollama or Atomic Chat) |
 | `OPENAI_MODEL` | Yes | Model name such as `gpt-4o`, `deepseek-chat`, or `llama3.3:70b` |
 | `OPENAI_BASE_URL` | No | API endpoint, defaulting to `https://api.openai.com/v1` |
+| `CLAUDE_CODE_USE_GIGACHAT` | GigaChat | Set to `1` to enable GigaChat strict mTLS mode |
+| `GIGACHAT_BASE_URL` | GigaChat | GigaChat endpoint, default `https://gigachat.devices.sberbank.ru/api/v1` |
+| `GIGACHAT_MODEL` | GigaChat | Model name, default `GigaChat-2` |
+| `GIGACHAT_CERT_PATH` | GigaChat | Path to client certificate PEM |
+| `GIGACHAT_KEY_PATH` | GigaChat | Path to private key PEM |
+| `GIGACHAT_CA_PATH` | GigaChat | Optional custom CA certificate path |
+| `GIGACHAT_KEY_PASSPHRASE` | GigaChat | Optional private key passphrase |
 | `CODEX_API_KEY` | Codex only | Codex or ChatGPT access token override |
 | `CODEX_AUTH_JSON_PATH` | Codex only | Path to a Codex CLI `auth.json` file |
 | `CODEX_HOME` | Codex only | Alternative Codex home directory |
@@ -229,11 +249,17 @@ bun run profile:init -- --provider atomic-chat
 # codex bootstrap with a fast model alias
 bun run profile:init -- --provider codex --model codexspark
 
+# gigachat bootstrap (strict mTLS, requires cert/key)
+bun run profile:init -- --provider gigachat --cert-path /path/to/client.crt --key-path /path/to/client.key
+
 # launch using persisted profile (.openclaude-profile.json)
 bun run dev:profile
 
 # codex profile (uses CODEX_API_KEY or ~/.codex/auth.json)
 bun run dev:codex
+
+# gigachat profile (strict mTLS cert/key auth)
+bun run dev:gigachat
 
 # OpenAI profile (requires OPENAI_API_KEY in your shell)
 bun run dev:openai
@@ -255,7 +281,7 @@ Use `--provider atomic-chat` when you want Atomic Chat as the local Apple Silico
 
 Use `profile:codex` or `--provider codex` when you want the ChatGPT Codex backend.
 
-`dev:openai`, `dev:ollama`, `dev:atomic-chat`, and `dev:codex` run `doctor:runtime` first and only launch the app if checks pass.
+`dev:openai`, `dev:ollama`, `dev:atomic-chat`, `dev:codex`, and `dev:gigachat` run `doctor:runtime` first and only launch the app if checks pass.
 
 For `dev:ollama`, make sure Ollama is running locally before launch.
 

@@ -7,6 +7,7 @@ import {
   type GeminiResolvedCredential,
   resolveGeminiCredential,
 } from './geminiAuth.js'
+import { resolveGigaChatCredential } from './gigachatAuth.js'
 import { redactSecretValueForDisplay } from './providerProfile.js'
 
 function isEnvTruthy(value: string | undefined): boolean {
@@ -25,6 +26,20 @@ export async function getProviderValidationError(
 ): Promise<string | null> {
   const useOpenAI = isEnvTruthy(env.CLAUDE_CODE_USE_OPENAI)
   const useGithub = isEnvTruthy(env.CLAUDE_CODE_USE_GITHUB)
+  const useGigaChat = isEnvTruthy(env.CLAUDE_CODE_USE_GIGACHAT)
+
+  if (useGigaChat) {
+    const credential = resolveGigaChatCredential(env)
+    if (credential.kind === 'certificate') {
+      return null
+    }
+    if (credential.reason === 'missing_paths') {
+      const missing = credential.missing?.join(', ') ??
+        'GIGACHAT_CERT_PATH, GIGACHAT_KEY_PATH'
+      return `${missing} are required when CLAUDE_CODE_USE_GIGACHAT=1.`
+    }
+    return `Unable to load GigaChat mTLS certificate files: ${credential.detail ?? 'unknown error'}.`
+  }
 
   if (isEnvTruthy(env.CLAUDE_CODE_USE_GEMINI)) {
     const geminiCredential = await (

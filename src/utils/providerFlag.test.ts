@@ -11,6 +11,7 @@ const originalEnv = { ...process.env }
 afterEach(() => {
   for (const key of [
     'CLAUDE_CODE_USE_OPENAI',
+    'CLAUDE_CODE_USE_GIGACHAT',
     'CLAUDE_CODE_USE_GEMINI',
     'CLAUDE_CODE_USE_GITHUB',
     'CLAUDE_CODE_USE_BEDROCK',
@@ -19,6 +20,11 @@ afterEach(() => {
     'OPENAI_API_KEY',
     'OPENAI_MODEL',
     'GEMINI_MODEL',
+    'GIGACHAT_MODEL',
+    'GIGACHAT_CERT_PATH',
+    'GIGACHAT_KEY_PATH',
+    'GIGACHAT_CA_PATH',
+    'GIGACHAT_KEY_PASSPHRASE',
   ]) {
     if (originalEnv[key] === undefined) delete process.env[key]
     else process.env[key] = originalEnv[key]
@@ -87,6 +93,36 @@ describe('applyProviderFlag - gemini', () => {
   test('sets GEMINI_MODEL when --model is provided', () => {
     applyProviderFlag('gemini', ['--model', 'gemini-2.0-flash'])
     expect(process.env.GEMINI_MODEL).toBe('gemini-2.0-flash')
+  })
+})
+
+describe('applyProviderFlag - gigachat', () => {
+  test('sets CLAUDE_CODE_USE_GIGACHAT=1', () => {
+    const result = applyProviderFlag('gigachat', [])
+    expect(result.error).toBeUndefined()
+    expect(process.env.CLAUDE_CODE_USE_GIGACHAT).toBe('1')
+  })
+
+  test('sets GIGACHAT_MODEL when --model is provided', () => {
+    applyProviderFlag('gigachat', ['--model', 'GigaChat-2'])
+    expect(process.env.GIGACHAT_MODEL).toBe('GigaChat-2')
+  })
+
+  test('sets cert/key/ca/passphrase flags when provided', () => {
+    applyProviderFlag('gigachat', [
+      '--cert-path',
+      '/tmp/client.crt',
+      '--key-path',
+      '/tmp/client.key',
+      '--ca-path',
+      '/tmp/ca.crt',
+      '--key-passphrase',
+      'secret',
+    ])
+    expect(process.env.GIGACHAT_CERT_PATH).toBe('/tmp/client.crt')
+    expect(process.env.GIGACHAT_KEY_PATH).toBe('/tmp/client.key')
+    expect(process.env.GIGACHAT_CA_PATH).toBe('/tmp/ca.crt')
+    expect(process.env.GIGACHAT_KEY_PASSPHRASE).toBe('secret')
   })
 })
 

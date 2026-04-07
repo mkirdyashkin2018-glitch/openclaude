@@ -82,9 +82,17 @@ const LOGO_CLAUDE = [
 // ─── Provider detection ───────────────────────────────────────────────────────
 
 function detectProvider(): { name: string; model: string; baseUrl: string; isLocal: boolean } {
+  const useGigaChat = process.env.CLAUDE_CODE_USE_GIGACHAT === '1' || process.env.CLAUDE_CODE_USE_GIGACHAT === 'true'
   const useGemini = process.env.CLAUDE_CODE_USE_GEMINI === '1' || process.env.CLAUDE_CODE_USE_GEMINI === 'true'
   const useGithub = process.env.CLAUDE_CODE_USE_GITHUB === '1' || process.env.CLAUDE_CODE_USE_GITHUB === 'true'
   const useOpenAI = process.env.CLAUDE_CODE_USE_OPENAI === '1' || process.env.CLAUDE_CODE_USE_OPENAI === 'true'
+
+  if (useGigaChat) {
+    const model = process.env.GIGACHAT_MODEL || 'GigaChat-2'
+    const baseUrl =
+      process.env.GIGACHAT_BASE_URL || 'https://gigachat.devices.sberbank.ru/api/v1'
+    return { name: 'GigaChat', model, baseUrl, isLocal: false }
+  }
 
   if (useGemini) {
     const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash'

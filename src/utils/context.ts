@@ -75,6 +75,7 @@ export function getContextWindowForModel(
   // OpenAI-compatible provider — use known context windows for the model
   if (
     isEnvTruthy(process.env.CLAUDE_CODE_USE_OPENAI) ||
+    isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT) ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI) ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_GITHUB)
   ) {
@@ -178,6 +179,7 @@ export function getModelMaxOutputTokens(model: string): {
   // OpenAI-compatible provider — use known output limits to avoid 400 errors
   if (
     isEnvTruthy(process.env.CLAUDE_CODE_USE_OPENAI) ||
+    isEnvTruthy(process.env.CLAUDE_CODE_USE_GIGACHAT) ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI) ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_GITHUB)
   ) {

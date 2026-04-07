@@ -25,6 +25,8 @@ import {
   buildOllamaProfileEnv,
   buildOpenAIProfileEnv,
   createProfileFile,
+  DEFAULT_GIGACHAT_BASE_URL,
+  DEFAULT_GIGACHAT_MODEL,
   DEFAULT_GEMINI_BASE_URL,
   DEFAULT_GEMINI_MODEL,
   deleteProfileFile,
@@ -178,6 +180,21 @@ export function buildCurrentProviderSummary(options?: {
     }
   }
 
+  if (isEnvTruthy(processEnv.CLAUDE_CODE_USE_GIGACHAT)) {
+    return {
+      providerLabel: 'GigaChat',
+      modelLabel: getSafeDisplayValue(
+        processEnv.GIGACHAT_MODEL ?? DEFAULT_GIGACHAT_MODEL,
+        processEnv,
+      ),
+      endpointLabel: getSafeDisplayValue(
+        processEnv.GIGACHAT_BASE_URL ?? DEFAULT_GIGACHAT_BASE_URL,
+        processEnv,
+      ),
+      savedProfileLabel,
+    }
+  }
+
   if (isEnvTruthy(processEnv.CLAUDE_CODE_USE_OPENAI)) {
     const request = resolveProviderRequest({
       model: processEnv.OPENAI_MODEL,
@@ -220,6 +237,24 @@ function buildSavedProfileSummary(
   env: ProfileEnv,
 ): SavedProfileSummary {
   switch (profile) {
+    case 'gigachat':
+      return {
+        providerLabel: 'GigaChat',
+        modelLabel: getSafeDisplayValue(
+          env.GIGACHAT_MODEL ?? DEFAULT_GIGACHAT_MODEL,
+          process.env,
+          env,
+        ),
+        endpointLabel: getSafeDisplayValue(
+          env.GIGACHAT_BASE_URL ?? DEFAULT_GIGACHAT_BASE_URL,
+          process.env,
+          env,
+        ),
+        credentialLabel:
+          env.GIGACHAT_CERT_PATH && env.GIGACHAT_KEY_PATH
+            ? 'mTLS cert/key configured'
+            : undefined,
+      }
     case 'gemini':
       return {
         providerLabel: 'Google Gemini',

@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 
 const originalEnv = {
+  CLAUDE_CODE_USE_GIGACHAT: process.env.CLAUDE_CODE_USE_GIGACHAT,
   CLAUDE_CODE_USE_GEMINI: process.env.CLAUDE_CODE_USE_GEMINI,
   CLAUDE_CODE_USE_GITHUB: process.env.CLAUDE_CODE_USE_GITHUB,
   CLAUDE_CODE_USE_OPENAI: process.env.CLAUDE_CODE_USE_OPENAI,
@@ -13,6 +14,7 @@ const originalEnv = {
 }
 
 afterEach(() => {
+  process.env.CLAUDE_CODE_USE_GIGACHAT = originalEnv.CLAUDE_CODE_USE_GIGACHAT
   process.env.CLAUDE_CODE_USE_GEMINI = originalEnv.CLAUDE_CODE_USE_GEMINI
   process.env.CLAUDE_CODE_USE_GITHUB = originalEnv.CLAUDE_CODE_USE_GITHUB
   process.env.CLAUDE_CODE_USE_OPENAI = originalEnv.CLAUDE_CODE_USE_OPENAI
@@ -29,6 +31,7 @@ async function importFreshProvidersModule() {
 }
 
 function clearProviderEnv(): void {
+  delete process.env.CLAUDE_CODE_USE_GIGACHAT
   delete process.env.CLAUDE_CODE_USE_GEMINI
   delete process.env.CLAUDE_CODE_USE_GITHUB
   delete process.env.CLAUDE_CODE_USE_OPENAI
@@ -51,6 +54,7 @@ test('first-party provider keeps Anthropic account setup flow enabled', () => {
 })
 
 test.each([
+  ['CLAUDE_CODE_USE_GIGACHAT', 'gigachat'],
   ['CLAUDE_CODE_USE_OPENAI', 'openai'],
   ['CLAUDE_CODE_USE_GITHUB', 'github'],
   ['CLAUDE_CODE_USE_GEMINI', 'gemini'],
@@ -77,6 +81,16 @@ test('GEMINI takes precedence over GitHub when both are set', async () => {
   const { getAPIProvider } = await importFreshProvidersModule()
 
   expect(getAPIProvider()).toBe('gemini')
+})
+
+test('GigaChat takes precedence over Gemini and GitHub when set', async () => {
+  clearProviderEnv()
+  process.env.CLAUDE_CODE_USE_GIGACHAT = '1'
+  process.env.CLAUDE_CODE_USE_GEMINI = '1'
+  process.env.CLAUDE_CODE_USE_GITHUB = '1'
+  const { getAPIProvider } = await importFreshProvidersModule()
+
+  expect(getAPIProvider()).toBe('gigachat')
 })
 
 test('explicit local openai-compatible base URLs stay on the openai provider', async () => {

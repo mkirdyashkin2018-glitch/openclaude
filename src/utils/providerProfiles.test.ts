@@ -7,6 +7,7 @@ const originalEnv = { ...process.env }
 const RESTORED_KEYS = [
   'CLAUDE_CODE_PROVIDER_PROFILE_ENV_APPLIED',
   'CLAUDE_CODE_USE_OPENAI',
+  'CLAUDE_CODE_USE_GIGACHAT',
   'CLAUDE_CODE_USE_GEMINI',
   'CLAUDE_CODE_USE_GITHUB',
   'CLAUDE_CODE_USE_BEDROCK',
@@ -16,6 +17,12 @@ const RESTORED_KEYS = [
   'OPENAI_API_BASE',
   'OPENAI_MODEL',
   'OPENAI_API_KEY',
+  'GIGACHAT_BASE_URL',
+  'GIGACHAT_MODEL',
+  'GIGACHAT_CERT_PATH',
+  'GIGACHAT_KEY_PATH',
+  'GIGACHAT_CA_PATH',
+  'GIGACHAT_KEY_PASSPHRASE',
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_MODEL',
   'ANTHROPIC_API_KEY',
@@ -85,6 +92,7 @@ describe('applyProviderProfileToProcessEnv', () => {
 
     expect(process.env.CLAUDE_CODE_USE_GEMINI).toBeUndefined()
     expect(process.env.CLAUDE_CODE_USE_GITHUB).toBeUndefined()
+    expect(process.env.CLAUDE_CODE_USE_GIGACHAT).toBeUndefined()
     expect(process.env.CLAUDE_CODE_USE_OPENAI).toBe('1')
     expect(getAPIProvider()).toBe('openai')
   })
@@ -105,8 +113,34 @@ describe('applyProviderProfileToProcessEnv', () => {
 
     expect(process.env.CLAUDE_CODE_USE_GEMINI).toBeUndefined()
     expect(process.env.CLAUDE_CODE_USE_GITHUB).toBeUndefined()
+    expect(process.env.CLAUDE_CODE_USE_GIGACHAT).toBeUndefined()
     expect(process.env.CLAUDE_CODE_USE_OPENAI).toBeUndefined()
     expect(getAPIProvider()).toBe('firstParty')
+  })
+
+  test('gigachat profile enables strict mTLS provider env', async () => {
+    const { applyProviderProfileToProcessEnv, getAPIProvider } =
+      await importFreshProviderModules()
+
+    applyProviderProfileToProcessEnv(
+      buildProfile({
+        provider: 'gigachat',
+        baseUrl: 'https://gigachat.devices.sberbank.ru/api/v1',
+        model: 'GigaChat-2',
+        certPath: '/tmp/client.crt',
+        keyPath: '/tmp/client.key',
+      }),
+    )
+
+    expect(process.env.CLAUDE_CODE_USE_GIGACHAT).toBe('1')
+    expect(process.env.CLAUDE_CODE_USE_OPENAI).toBeUndefined()
+    expect(process.env.GIGACHAT_BASE_URL).toBe(
+      'https://gigachat.devices.sberbank.ru/api/v1',
+    )
+    expect(process.env.GIGACHAT_MODEL).toBe('GigaChat-2')
+    expect(process.env.GIGACHAT_CERT_PATH).toBe('/tmp/client.crt')
+    expect(process.env.GIGACHAT_KEY_PATH).toBe('/tmp/client.key')
+    expect(getAPIProvider()).toBe('gigachat')
   })
 })
 
@@ -161,6 +195,7 @@ describe('applyActiveProviderProfileFromConfig', () => {
 
   test('applies active profile when no explicit provider is selected', async () => {
     delete process.env.CLAUDE_CODE_USE_OPENAI
+    delete process.env.CLAUDE_CODE_USE_GIGACHAT
     delete process.env.CLAUDE_CODE_USE_GEMINI
     delete process.env.CLAUDE_CODE_USE_GITHUB
     delete process.env.CLAUDE_CODE_USE_BEDROCK
@@ -227,6 +262,7 @@ describe('deleteProviderProfile', () => {
     expect(process.env.CLAUDE_CODE_PROVIDER_PROFILE_ENV_APPLIED).toBeUndefined()
 
     expect(process.env.CLAUDE_CODE_USE_OPENAI).toBeUndefined()
+    expect(process.env.CLAUDE_CODE_USE_GIGACHAT).toBeUndefined()
     expect(process.env.CLAUDE_CODE_USE_GEMINI).toBeUndefined()
     expect(process.env.CLAUDE_CODE_USE_GITHUB).toBeUndefined()
     expect(process.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined()
@@ -237,6 +273,10 @@ describe('deleteProviderProfile', () => {
     expect(process.env.OPENAI_API_BASE).toBeUndefined()
     expect(process.env.OPENAI_MODEL).toBeUndefined()
     expect(process.env.OPENAI_API_KEY).toBeUndefined()
+    expect(process.env.GIGACHAT_BASE_URL).toBeUndefined()
+    expect(process.env.GIGACHAT_MODEL).toBeUndefined()
+    expect(process.env.GIGACHAT_CERT_PATH).toBeUndefined()
+    expect(process.env.GIGACHAT_KEY_PATH).toBeUndefined()
 
     expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined()
     expect(process.env.ANTHROPIC_MODEL).toBeUndefined()
@@ -268,6 +308,7 @@ describe('deleteProviderProfile', () => {
 
     expect(process.env.CLAUDE_CODE_PROVIDER_PROFILE_ENV_APPLIED).toBeUndefined()
     expect(process.env.CLAUDE_CODE_USE_OPENAI).toBe('1')
+    expect(process.env.CLAUDE_CODE_USE_GIGACHAT).toBeUndefined()
     expect(process.env.OPENAI_BASE_URL).toBe('http://localhost:11434/v1')
     expect(process.env.OPENAI_MODEL).toBe('qwen2.5:3b')
   })

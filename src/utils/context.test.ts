@@ -8,6 +8,7 @@ import {
 
 const originalEnv = {
   CLAUDE_CODE_USE_OPENAI: process.env.CLAUDE_CODE_USE_OPENAI,
+  CLAUDE_CODE_USE_GIGACHAT: process.env.CLAUDE_CODE_USE_GIGACHAT,
   CLAUDE_CODE_MAX_OUTPUT_TOKENS: process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS,
 }
 
@@ -16,6 +17,11 @@ afterEach(() => {
     delete process.env.CLAUDE_CODE_USE_OPENAI
   } else {
     process.env.CLAUDE_CODE_USE_OPENAI = originalEnv.CLAUDE_CODE_USE_OPENAI
+  }
+  if (originalEnv.CLAUDE_CODE_USE_GIGACHAT === undefined) {
+    delete process.env.CLAUDE_CODE_USE_GIGACHAT
+  } else {
+    process.env.CLAUDE_CODE_USE_GIGACHAT = originalEnv.CLAUDE_CODE_USE_GIGACHAT
   }
   if (originalEnv.CLAUDE_CODE_MAX_OUTPUT_TOKENS === undefined) {
     delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS

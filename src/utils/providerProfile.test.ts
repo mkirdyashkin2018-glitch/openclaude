@@ -8,11 +8,14 @@ import {
   buildStartupEnvFromProfile,
   buildAtomicChatProfileEnv,
   buildCodexProfileEnv,
+  buildGigaChatProfileEnv,
   buildGeminiProfileEnv,
   buildLaunchEnv,
   buildOllamaProfileEnv,
   buildOpenAIProfileEnv,
   createProfileFile,
+  DEFAULT_GIGACHAT_BASE_URL,
+  DEFAULT_GIGACHAT_MODEL,
   maskSecretForDisplay,
   loadProfileFile,
   PROFILE_FILE_NAME,
@@ -395,6 +398,56 @@ test('gemini profiles require a key', () => {
   assert.equal(env, null)
 })
 
+test('gigachat profiles require cert and key paths', () => {
+  const env = buildGigaChatProfileEnv({
+    processEnv: {},
+  })
+
+  assert.equal(env, null)
+})
+
+test('gigachat profiles build strict mTLS env with defaults', () => {
+  const env = buildGigaChatProfileEnv({
+    certPath: '/tmp/client.crt',
+    keyPath: '/tmp/client.key',
+    processEnv: {},
+  })
+
+  assert.deepEqual(env, {
+    GIGACHAT_BASE_URL: DEFAULT_GIGACHAT_BASE_URL,
+    GIGACHAT_MODEL: DEFAULT_GIGACHAT_MODEL,
+    GIGACHAT_CERT_PATH: '/tmp/client.crt',
+    GIGACHAT_KEY_PATH: '/tmp/client.key',
+  })
+})
+
+test('gigachat launch reuses persisted strict mTLS env', async () => {
+  const env = await buildLaunchEnv({
+    profile: 'gigachat',
+    persisted: profile('gigachat', {
+      GIGACHAT_BASE_URL: 'https://gigachat.devices.sberbank.ru/api/v1',
+      GIGACHAT_MODEL: 'GigaChat-2',
+      GIGACHAT_CERT_PATH: '/tmp/client.crt',
+      GIGACHAT_KEY_PATH: '/tmp/client.key',
+      GIGACHAT_CA_PATH: '/tmp/ca.crt',
+    }),
+    goal: 'balanced',
+    processEnv: {
+      OPENAI_API_KEY: 'sk-live',
+      CLAUDE_CODE_USE_OPENAI: '1',
+    },
+  })
+
+  assert.equal(env.CLAUDE_CODE_USE_GIGACHAT, '1')
+  assert.equal(env.CLAUDE_CODE_USE_OPENAI, undefined)
+  assert.equal(env.GIGACHAT_BASE_URL, 'https://gigachat.devices.sberbank.ru/api/v1')
+  assert.equal(env.GIGACHAT_MODEL, 'GigaChat-2')
+  assert.equal(env.GIGACHAT_CERT_PATH, '/tmp/client.crt')
+  assert.equal(env.GIGACHAT_KEY_PATH, '/tmp/client.key')
+  assert.equal(env.GIGACHAT_CA_PATH, '/tmp/ca.crt')
+  assert.equal(env.OPENAI_API_KEY, undefined)
+})
+
 test('saveProfileFile writes a profile that loadProfileFile can read back', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'openclaude-profile-file-'))
 
@@ -430,6 +483,24 @@ test('buildStartupEnvFromProfile applies persisted gemini settings when no provi
   assert.equal(env.CLAUDE_CODE_USE_OPENAI, undefined)
   assert.equal(env.GEMINI_API_KEY, 'gem-test')
   assert.equal(env.GEMINI_MODEL, 'gemini-2.5-flash')
+})
+
+test('buildStartupEnvFromProfile applies persisted gigachat strict mTLS settings', async () => {
+  const env = await buildStartupEnvFromProfile({
+    persisted: profile('gigachat', {
+      GIGACHAT_BASE_URL: 'https://gigachat.devices.sberbank.ru/api/v1',
+      GIGACHAT_MODEL: 'GigaChat-2',
+      GIGACHAT_CERT_PATH: '/tmp/client.crt',
+      GIGACHAT_KEY_PATH: '/tmp/client.key',
+    }),
+    processEnv: {},
+  })
+
+  assert.equal(env.CLAUDE_CODE_USE_GIGACHAT, '1')
+  assert.equal(env.GIGACHAT_BASE_URL, 'https://gigachat.devices.sberbank.ru/api/v1')
+  assert.equal(env.GIGACHAT_MODEL, 'GigaChat-2')
+  assert.equal(env.GIGACHAT_CERT_PATH, '/tmp/client.crt')
+  assert.equal(env.GIGACHAT_KEY_PATH, '/tmp/client.key')
 })
 
 test('buildStartupEnvFromProfile rehydrates stored Gemini access token for access-token profile mode', async () => {

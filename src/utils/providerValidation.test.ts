@@ -1,8 +1,16 @@
 import { afterEach, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { getProviderValidationError } from './providerValidation.ts'
 
 const originalEnv = {
+  CLAUDE_CODE_USE_GIGACHAT: process.env.CLAUDE_CODE_USE_GIGACHAT,
+  GIGACHAT_CERT_PATH: process.env.GIGACHAT_CERT_PATH,
+  GIGACHAT_KEY_PATH: process.env.GIGACHAT_KEY_PATH,
+  GIGACHAT_CA_PATH: process.env.GIGACHAT_CA_PATH,
+  GIGACHAT_KEY_PASSPHRASE: process.env.GIGACHAT_KEY_PASSPHRASE,
   CLAUDE_CODE_USE_GEMINI: process.env.CLAUDE_CODE_USE_GEMINI,
   GEMINI_API_KEY: process.env.GEMINI_API_KEY,
   GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
@@ -20,6 +28,14 @@ function restoreEnv(key: string, value: string | undefined): void {
 }
 
 afterEach(() => {
+  restoreEnv('CLAUDE_CODE_USE_GIGACHAT', originalEnv.CLAUDE_CODE_USE_GIGACHAT)
+  restoreEnv('GIGACHAT_CERT_PATH', originalEnv.GIGACHAT_CERT_PATH)
+  restoreEnv('GIGACHAT_KEY_PATH', originalEnv.GIGACHAT_KEY_PATH)
+  restoreEnv('GIGACHAT_CA_PATH', originalEnv.GIGACHAT_CA_PATH)
+  restoreEnv(
+    'GIGACHAT_KEY_PASSPHRASE',
+    originalEnv.GIGACHAT_KEY_PASSPHRASE,
+  )
   restoreEnv('CLAUDE_CODE_USE_GEMINI', originalEnv.CLAUDE_CODE_USE_GEMINI)
   restoreEnv('GEMINI_API_KEY', originalEnv.GEMINI_API_KEY)
   restoreEnv('GOOGLE_API_KEY', originalEnv.GOOGLE_API_KEY)
@@ -28,6 +44,34 @@ afterEach(() => {
   restoreEnv(
     'GOOGLE_APPLICATION_CREDENTIALS',
     originalEnv.GOOGLE_APPLICATION_CREDENTIALS,
+  )
+})
+
+test('accepts GigaChat strict mTLS cert/key credentials', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'openclaude-gigachat-'))
+  try {
+    const certPath = join(dir, 'client.crt')
+    const keyPath = join(dir, 'client.key')
+    writeFileSync(certPath, '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n')
+    writeFileSync(keyPath, '-----BEGIN PRIVATE KEY-----\nTEST\n-----END PRIVATE KEY-----\n')
+
+    process.env.CLAUDE_CODE_USE_GIGACHAT = '1'
+    process.env.GIGACHAT_CERT_PATH = certPath
+    process.env.GIGACHAT_KEY_PATH = keyPath
+
+    await expect(getProviderValidationError(process.env)).resolves.toBeNull()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('errors when GigaChat cert/key are missing', async () => {
+  process.env.CLAUDE_CODE_USE_GIGACHAT = '1'
+  delete process.env.GIGACHAT_CERT_PATH
+  delete process.env.GIGACHAT_KEY_PATH
+
+  await expect(getProviderValidationError(process.env)).resolves.toBe(
+    'GIGACHAT_CERT_PATH, GIGACHAT_KEY_PATH are required when CLAUDE_CODE_USE_GIGACHAT=1.',
   )
 })
 

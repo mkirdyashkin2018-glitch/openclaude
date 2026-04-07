@@ -8,6 +8,7 @@ import type { ModelOption } from './model/modelOptions.js'
 
 export type ProviderPreset =
   | 'anthropic'
+  | 'gigachat'
   | 'ollama'
   | 'openai'
   | 'moonshotai'
@@ -27,6 +28,10 @@ export type ProviderProfileInput = {
   baseUrl: string
   model: string
   apiKey?: string
+  certPath?: string
+  keyPath?: string
+  caPath?: string
+  keyPassphrase?: string
 }
 
 export type ProviderPresetDefaults = Omit<ProviderProfileInput, 'provider'> & {
@@ -54,11 +59,23 @@ function normalizeBaseUrl(value: string): string {
 function sanitizeProfile(profile: ProviderProfile): ProviderProfile | null {
   const id = trimValue(profile.id)
   const name = trimValue(profile.name)
-  const provider = profile.provider === 'anthropic' ? 'anthropic' : 'openai'
+  const provider =
+    profile.provider === 'anthropic'
+      ? 'anthropic'
+      : profile.provider === 'gigachat'
+        ? 'gigachat'
+        : 'openai'
   const baseUrl = normalizeBaseUrl(profile.baseUrl)
   const model = trimValue(profile.model)
+  const certPath = trimOrUndefined(profile.certPath)
+  const keyPath = trimOrUndefined(profile.keyPath)
+  const caPath = trimOrUndefined(profile.caPath)
+  const keyPassphrase = trimOrUndefined(profile.keyPassphrase)
 
   if (!id || !name || !baseUrl || !model) {
+    return null
+  }
+  if (provider === 'gigachat' && (!certPath || !keyPath)) {
     return null
   }
 
@@ -69,6 +86,14 @@ function sanitizeProfile(profile: ProviderProfile): ProviderProfile | null {
     baseUrl,
     model,
     apiKey: trimOrUndefined(profile.apiKey),
+    ...(provider === 'gigachat'
+      ? {
+          certPath,
+          keyPath,
+          ...(caPath ? { caPath } : {}),
+          ...(keyPassphrase ? { keyPassphrase } : {}),
+        }
+      : {}),
   }
 }
 
@@ -103,6 +128,10 @@ function toProfile(
     baseUrl: input.baseUrl,
     model: input.model,
     apiKey: input.apiKey,
+    certPath: input.certPath,
+    keyPath: input.keyPath,
+    caPath: input.caPath,
+    keyPassphrase: input.keyPassphrase,
   })
 }
 
@@ -125,6 +154,19 @@ export function getProviderPresetDefaults(
         model: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6',
         apiKey: process.env.ANTHROPIC_API_KEY ?? '',
         requiresApiKey: true,
+      }
+    case 'gigachat':
+      return {
+        provider: 'gigachat',
+        name: 'GigaChat',
+        baseUrl: 'https://gigachat.devices.sberbank.ru/api/v1',
+        model: 'GigaChat-2',
+        certPath: process.env.GIGACHAT_CERT_PATH ?? '',
+        keyPath: process.env.GIGACHAT_KEY_PATH ?? '',
+        caPath: process.env.GIGACHAT_CA_PATH ?? '',
+        keyPassphrase: process.env.GIGACHAT_KEY_PASSPHRASE ?? '',
+        apiKey: '',
+        requiresApiKey: false,
       }
     case 'openai':
       return {
@@ -256,6 +298,7 @@ function hasProviderSelectionFlags(
 ): boolean {
   return (
     processEnv.CLAUDE_CODE_USE_OPENAI !== undefined ||
+    processEnv.CLAUDE_CODE_USE_GIGACHAT !== undefined ||
     processEnv.CLAUDE_CODE_USE_GEMINI !== undefined ||
     processEnv.CLAUDE_CODE_USE_GITHUB !== undefined ||
     processEnv.CLAUDE_CODE_USE_BEDROCK !== undefined ||
@@ -294,8 +337,30 @@ function isProcessEnvAlignedWithProfile(
     )
   }
 
+  if (profile.provider === 'gigachat') {
+    return (
+      processEnv.CLAUDE_CODE_USE_GIGACHAT !== undefined &&
+      processEnv.CLAUDE_CODE_USE_OPENAI === undefined &&
+      processEnv.CLAUDE_CODE_USE_GEMINI === undefined &&
+      processEnv.CLAUDE_CODE_USE_GITHUB === undefined &&
+      processEnv.CLAUDE_CODE_USE_BEDROCK === undefined &&
+      processEnv.CLAUDE_CODE_USE_VERTEX === undefined &&
+      processEnv.CLAUDE_CODE_USE_FOUNDRY === undefined &&
+      sameOptionalEnvValue(processEnv.GIGACHAT_BASE_URL, profile.baseUrl) &&
+      sameOptionalEnvValue(processEnv.GIGACHAT_MODEL, profile.model) &&
+      sameOptionalEnvValue(processEnv.GIGACHAT_CERT_PATH, profile.certPath) &&
+      sameOptionalEnvValue(processEnv.GIGACHAT_KEY_PATH, profile.keyPath) &&
+      sameOptionalEnvValue(processEnv.GIGACHAT_CA_PATH, profile.caPath) &&
+      sameOptionalEnvValue(
+        processEnv.GIGACHAT_KEY_PASSPHRASE,
+        profile.keyPassphrase,
+      )
+    )
+  }
+
   return (
     processEnv.CLAUDE_CODE_USE_OPENAI !== undefined &&
+    processEnv.CLAUDE_CODE_USE_GIGACHAT === undefined &&
     processEnv.CLAUDE_CODE_USE_GEMINI === undefined &&
     processEnv.CLAUDE_CODE_USE_GITHUB === undefined &&
     processEnv.CLAUDE_CODE_USE_BEDROCK === undefined &&
@@ -324,6 +389,7 @@ export function clearProviderProfileEnvFromProcessEnv(
   processEnv: NodeJS.ProcessEnv = process.env,
 ): void {
   delete processEnv.CLAUDE_CODE_USE_OPENAI
+  delete processEnv.CLAUDE_CODE_USE_GIGACHAT
   delete processEnv.CLAUDE_CODE_USE_GEMINI
   delete processEnv.CLAUDE_CODE_USE_GITHUB
   delete processEnv.CLAUDE_CODE_USE_BEDROCK
@@ -334,6 +400,12 @@ export function clearProviderProfileEnvFromProcessEnv(
   delete processEnv.OPENAI_API_BASE
   delete processEnv.OPENAI_MODEL
   delete processEnv.OPENAI_API_KEY
+  delete processEnv.GIGACHAT_BASE_URL
+  delete processEnv.GIGACHAT_MODEL
+  delete processEnv.GIGACHAT_CERT_PATH
+  delete processEnv.GIGACHAT_KEY_PATH
+  delete processEnv.GIGACHAT_CA_PATH
+  delete processEnv.GIGACHAT_KEY_PASSPHRASE
 
   delete processEnv.ANTHROPIC_BASE_URL
   delete processEnv.ANTHROPIC_MODEL
@@ -345,8 +417,8 @@ export function applyProviderProfileToProcessEnv(profile: ProviderProfile): void
   clearProviderProfileEnvFromProcessEnv()
   process.env[PROFILE_ENV_APPLIED_FLAG] = '1'
 
-  process.env.ANTHROPIC_MODEL = profile.model
   if (profile.provider === 'anthropic') {
+    process.env.ANTHROPIC_MODEL = profile.model
     process.env.ANTHROPIC_BASE_URL = profile.baseUrl
 
     if (profile.apiKey) {
@@ -359,6 +431,26 @@ export function applyProviderProfileToProcessEnv(profile: ProviderProfile): void
     delete process.env.OPENAI_API_BASE
     delete process.env.OPENAI_MODEL
     delete process.env.OPENAI_API_KEY
+    return
+  }
+
+  if (profile.provider === 'gigachat') {
+    process.env.CLAUDE_CODE_USE_GIGACHAT = '1'
+    process.env.GIGACHAT_BASE_URL = profile.baseUrl
+    process.env.GIGACHAT_MODEL = profile.model
+    process.env.GIGACHAT_CERT_PATH = profile.certPath ?? ''
+    process.env.GIGACHAT_KEY_PATH = profile.keyPath ?? ''
+
+    if (profile.caPath) {
+      process.env.GIGACHAT_CA_PATH = profile.caPath
+    } else {
+      delete process.env.GIGACHAT_CA_PATH
+    }
+    if (profile.keyPassphrase) {
+      process.env.GIGACHAT_KEY_PASSPHRASE = profile.keyPassphrase
+    } else {
+      delete process.env.GIGACHAT_KEY_PASSPHRASE
+    }
     return
   }
 
